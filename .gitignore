@@ -1,0 +1,69 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# Generated protobuf code
+crates/*/src/generated/*.rs
+!crates/*/src/generated/.gitkeep
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# InfraSim data (local)
+/data/
+*.db
+*.db-journal
+
+# VM images (too large for git)
+*.qcow2
+*.raw
+*.img
+*.iso
+
+# Keys (sensitive)
+*.key
+*.pem
+!*.pub
+
+# Logs
+*.log
+logs/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+
+# Build artifacts
+*.dSYM/
+/dist/
+
+# Environment files (may contain secrets)
+.env
+.env.*
+!.env.example
+
+# Node.js
+node_modules/
+**/node_modules/
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Frontend build outputs
+ui/apps/*/dist/
+ui/packages/*/dist/
+
+# pnpm
+.pnpm-debug.log

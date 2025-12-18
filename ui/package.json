@@ -1,0 +1,17 @@
+{
+  "name": "infrasim-ui-workspace",
+  "private": true,
+  "version": "0.0.1",
+  "packageManager": "pnpm@9.11.0",
+  "scripts": {
+    "dev": "pnpm --filter console dev",
+    "build": "pnpm --filter console build",
+    "lint": "pnpm --filter console lint",
+    "typecheck": "pnpm --filter console typecheck",
+    "fmt": "pnpm --filter console format"
+  },
+  "devDependencies": {
+    "@types/node": "22.7.4",
+    "typescript": "5.5.4"
+  }
+}

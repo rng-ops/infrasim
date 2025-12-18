@@ -1,0 +1,665 @@
+syntax = "proto3";
+
+package infrasim.v1;
+
+option go_package = "github.com/infrasim/infrasim/gen/go/infrasim/v1";
+
+// ============================================================================
+// InfraSim Daemon API
+// ============================================================================
+
+service InfraSimDaemon {
+  // VM lifecycle
+  rpc CreateVM(CreateVMRequest) returns (CreateVMResponse);
+  rpc GetVM(GetVMRequest) returns (GetVMResponse);
+  rpc UpdateVM(UpdateVMRequest) returns (UpdateVMResponse);
+  rpc DeleteVM(DeleteVMRequest) returns (DeleteVMResponse);
+  rpc ListVMs(ListVMsRequest) returns (ListVMsResponse);
+  rpc StartVM(StartVMRequest) returns (StartVMResponse);
+  rpc StopVM(StopVMRequest) returns (StopVMResponse);
+  
+  // Network management
+  rpc CreateNetwork(CreateNetworkRequest) returns (CreateNetworkResponse);
+  rpc GetNetwork(GetNetworkRequest) returns (GetNetworkResponse);
+  rpc DeleteNetwork(DeleteNetworkRequest) returns (DeleteNetworkResponse);
+  rpc ListNetworks(ListNetworksRequest) returns (ListNetworksResponse);
+  
+  // QoS profiles
+  rpc CreateQoSProfile(CreateQoSProfileRequest) returns (CreateQoSProfileResponse);
+  rpc GetQoSProfile(GetQoSProfileRequest) returns (GetQoSProfileResponse);
+  rpc DeleteQoSProfile(DeleteQoSProfileRequest) returns (DeleteQoSProfileResponse);
+  rpc ListQoSProfiles(ListQoSProfilesRequest) returns (ListQoSProfilesResponse);
+  
+  // Volume management
+  rpc CreateVolume(CreateVolumeRequest) returns (CreateVolumeResponse);
+  rpc GetVolume(GetVolumeRequest) returns (GetVolumeResponse);
+  rpc DeleteVolume(DeleteVolumeRequest) returns (DeleteVolumeResponse);
+  rpc ListVolumes(ListVolumesRequest) returns (ListVolumesResponse);
+  
+  // Console management
+  rpc CreateConsole(CreateConsoleRequest) returns (CreateConsoleResponse);
+  rpc GetConsole(GetConsoleRequest) returns (GetConsoleResponse);
+  rpc DeleteConsole(DeleteConsoleRequest) returns (DeleteConsoleResponse);
+  
+  // Snapshot management
+  rpc CreateSnapshot(CreateSnapshotRequest) returns (CreateSnapshotResponse);
+  rpc GetSnapshot(GetSnapshotRequest) returns (GetSnapshotResponse);
+  rpc DeleteSnapshot(DeleteSnapshotRequest) returns (DeleteSnapshotResponse);
+  rpc ListSnapshots(ListSnapshotsRequest) returns (ListSnapshotsResponse);
+  rpc RestoreSnapshot(RestoreSnapshotRequest) returns (RestoreSnapshotResponse);
+  
+  // Benchmark management
+  rpc CreateBenchmarkRun(CreateBenchmarkRunRequest) returns (CreateBenchmarkRunResponse);
+  rpc GetBenchmarkRun(GetBenchmarkRunRequest) returns (GetBenchmarkRunResponse);
+  rpc ListBenchmarkRuns(ListBenchmarkRunsRequest) returns (ListBenchmarkRunsResponse);
+  
+  // Attestation
+  rpc GetAttestation(GetAttestationRequest) returns (GetAttestationResponse);
+  
+  // Software-defined devices
+  rpc CreateLoRaDevice(CreateLoRaDeviceRequest) returns (CreateLoRaDeviceResponse);
+  rpc GetLoRaDevice(GetLoRaDeviceRequest) returns (GetLoRaDeviceResponse);
+  rpc DeleteLoRaDevice(DeleteLoRaDeviceRequest) returns (DeleteLoRaDeviceResponse);
+  
+  // Health and status
+  rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
+  rpc GetDaemonStatus(GetDaemonStatusRequest) returns (GetDaemonStatusResponse);
+}
+
+// ============================================================================
+// Common Types
+// ============================================================================
+
+message ResourceMeta {
+  string id = 1;
+  string name = 2;
+  map<string, string> labels = 3;
+  map<string, string> annotations = 4;
+  int64 created_at = 5;
+  int64 updated_at = 6;
+  int64 generation = 7;
+}
+
+enum VMState {
+  VM_STATE_UNSPECIFIED = 0;
+  VM_STATE_PENDING = 1;
+  VM_STATE_RUNNING = 2;
+  VM_STATE_STOPPED = 3;
+  VM_STATE_PAUSED = 4;
+  VM_STATE_ERROR = 5;
+}
+
+enum NetworkMode {
+  NETWORK_MODE_UNSPECIFIED = 0;
+  NETWORK_MODE_USER = 1;
+  NETWORK_MODE_VMNET_SHARED = 2;
+  NETWORK_MODE_VMNET_BRIDGED = 3;
+}
+
+enum VolumeKind {
+  VOLUME_KIND_UNSPECIFIED = 0;
+  VOLUME_KIND_DISK = 1;
+  VOLUME_KIND_WEIGHTS = 2;
+}
+
+message IntegrityConfig {
+  string scheme = 1;  // "signed_manifest", "sha256", etc.
+  bytes public_key = 2;
+  bytes signature = 3;
+  string expected_digest = 4;
+}
+
+// ============================================================================
+// VM Messages
+// ============================================================================
+
+message VMSpec {
+  string arch = 1;  // "aarch64"
+  string machine = 2;  // "virt" or "raspi3b"
+  int32 cpu_cores = 3;
+  int64 memory_mb = 4;
+  repeated string volume_ids = 5;
+  repeated string network_ids = 6;
+  string qos_profile_id = 7;
+  bool enable_tpm = 8;
+  string boot_disk_id = 9;
+  map<string, string> extra_args = 10;
+  bool compatibility_mode = 11;  // true = slow raspi emulation
+}
+
+message VMStatus {
+  VMState state = 1;
+  string qemu_pid = 2;
+  string qmp_socket = 3;
+  string vnc_display = 4;
+  string error_message = 5;
+  int64 uptime_seconds = 6;
+}
+
+message VM {
+  ResourceMeta meta = 1;
+  VMSpec spec = 2;
+  VMStatus status = 3;
+}
+
+message CreateVMRequest {
+  string name = 1;
+  VMSpec spec = 2;
+  map<string, string> labels = 3;
+}
+
+message CreateVMResponse {
+  VM vm = 1;
+}
+
+message GetVMRequest {
+  string id = 1;
+}
+
+message GetVMResponse {
+  VM vm = 1;
+}
+
+message UpdateVMRequest {
+  string id = 1;
+  VMSpec spec = 2;
+}
+
+message UpdateVMResponse {
+  VM vm = 1;
+}
+
+message DeleteVMRequest {
+  string id = 1;
+  bool force = 2;
+}
+
+message DeleteVMResponse {}
+
+message ListVMsRequest {
+  map<string, string> label_selector = 1;
+}
+
+message ListVMsResponse {
+  repeated VM vms = 1;
+}
+
+message StartVMRequest {
+  string id = 1;
+}
+
+message StartVMResponse {
+  VM vm = 1;
+}
+
+message StopVMRequest {
+  string id = 1;
+  bool force = 2;
+}
+
+message StopVMResponse {
+  VM vm = 1;
+}
+
+// ============================================================================
+// Network Messages
+// ============================================================================
+
+message NetworkSpec {
+  NetworkMode mode = 1;
+  string cidr = 2;
+  string gateway = 3;
+  string dns = 4;
+  bool dhcp_enabled = 5;
+  int32 mtu = 6;
+}
+
+message NetworkStatus {
+  bool active = 1;
+  string bridge_interface = 2;
+  int32 connected_vms = 3;
+}
+
+message Network {
+  ResourceMeta meta = 1;
+  NetworkSpec spec = 2;
+  NetworkStatus status = 3;
+}
+
+message CreateNetworkRequest {
+  string name = 1;
+  NetworkSpec spec = 2;
+  map<string, string> labels = 3;
+}
+
+message CreateNetworkResponse {
+  Network network = 1;
+}
+
+message GetNetworkRequest {
+  string id = 1;
+}
+
+message GetNetworkResponse {
+  Network network = 1;
+}
+
+message DeleteNetworkRequest {
+  string id = 1;
+}
+
+message DeleteNetworkResponse {}
+
+message ListNetworksRequest {
+  map<string, string> label_selector = 1;
+}
+
+message ListNetworksResponse {
+  repeated Network networks = 1;
+}
+
+// ============================================================================
+// QoS Profile Messages
+// ============================================================================
+
+message QoSProfileSpec {
+  int32 latency_ms = 1;
+  int32 jitter_ms = 2;
+  float loss_percent = 3;
+  int32 rate_limit_mbps = 4;
+  int32 packet_padding_bytes = 5;
+  bool burst_shaping = 6;
+  int32 burst_size_kb = 7;
+}
+
+message QoSProfile {
+  ResourceMeta meta = 1;
+  QoSProfileSpec spec = 2;
+}
+
+message CreateQoSProfileRequest {
+  string name = 1;
+  QoSProfileSpec spec = 2;
+  map<string, string> labels = 3;
+}
+
+message CreateQoSProfileResponse {
+  QoSProfile profile = 1;
+}
+
+message GetQoSProfileRequest {
+  string id = 1;
+}
+
+message GetQoSProfileResponse {
+  QoSProfile profile = 1;
+}
+
+message DeleteQoSProfileRequest {
+  string id = 1;
+}
+
+message DeleteQoSProfileResponse {}
+
+message ListQoSProfilesRequest {
+  map<string, string> label_selector = 1;
+}
+
+message ListQoSProfilesResponse {
+  repeated QoSProfile profiles = 1;
+}
+
+// ============================================================================
+// Volume Messages
+// ============================================================================
+
+message VolumeSpec {
+  VolumeKind kind = 1;
+  string source = 2;  // OCI reference, file path, etc.
+  IntegrityConfig integrity = 3;
+  bool read_only = 4;
+  int64 size_bytes = 5;
+  string format = 6;  // "qcow2", "raw"
+  bool overlay = 7;  // Create copy-on-write overlay
+}
+
+message VolumeStatus {
+  bool ready = 1;
+  string local_path = 2;
+  string digest = 3;
+  int64 actual_size = 4;
+  bool verified = 5;
+}
+
+message Volume {
+  ResourceMeta meta = 1;
+  VolumeSpec spec = 2;
+  VolumeStatus status = 3;
+}
+
+message CreateVolumeRequest {
+  string name = 1;
+  VolumeSpec spec = 2;
+  map<string, string> labels = 3;
+}
+
+message CreateVolumeResponse {
+  Volume volume = 1;
+}
+
+message GetVolumeRequest {
+  string id = 1;
+}
+
+message GetVolumeResponse {
+  Volume volume = 1;
+}
+
+message DeleteVolumeRequest {
+  string id = 1;
+}
+
+message DeleteVolumeResponse {}
+
+message ListVolumesRequest {
+  map<string, string> label_selector = 1;
+  VolumeKind kind_filter = 2;
+}
+
+message ListVolumesResponse {
+  repeated Volume volumes = 1;
+}
+
+// ============================================================================
+// Console Messages
+// ============================================================================
+
+message ConsoleSpec {
+  string vm_id = 1;
+  bool enable_vnc = 2;
+  int32 vnc_port = 3;
+  bool enable_web = 4;
+  int32 web_port = 5;
+  string auth_token = 6;
+}
+
+message ConsoleStatus {
+  bool active = 1;
+  string vnc_host = 2;
+  int32 vnc_port = 3;
+  string web_url = 4;
+  int32 connected_clients = 5;
+}
+
+message Console {
+  ResourceMeta meta = 1;
+  ConsoleSpec spec = 2;
+  ConsoleStatus status = 3;
+}
+
+message CreateConsoleRequest {
+  string name = 1;
+  ConsoleSpec spec = 2;
+}
+
+message CreateConsoleResponse {
+  Console console = 1;
+}
+
+message GetConsoleRequest {
+  string id = 1;
+}
+
+message GetConsoleResponse {
+  Console console = 1;
+}
+
+message DeleteConsoleRequest {
+  string id = 1;
+}
+
+message DeleteConsoleResponse {}
+
+// ============================================================================
+// Snapshot Messages
+// ============================================================================
+
+message SnapshotSpec {
+  string vm_id = 1;
+  bool include_memory = 2;
+  bool include_disk = 3;
+  string description = 4;
+}
+
+message SnapshotStatus {
+  bool complete = 1;
+  string disk_snapshot_path = 2;
+  string memory_snapshot_path = 3;
+  string digest = 4;
+  int64 size_bytes = 5;
+  bool encrypted = 6;
+}
+
+message Snapshot {
+  ResourceMeta meta = 1;
+  SnapshotSpec spec = 2;
+  SnapshotStatus status = 3;
+}
+
+message CreateSnapshotRequest {
+  string name = 1;
+  SnapshotSpec spec = 2;
+  map<string, string> labels = 3;
+}
+
+message CreateSnapshotResponse {
+  Snapshot snapshot = 1;
+}
+
+message GetSnapshotRequest {
+  string id = 1;
+}
+
+message GetSnapshotResponse {
+  Snapshot snapshot = 1;
+}
+
+message DeleteSnapshotRequest {
+  string id = 1;
+}
+
+message DeleteSnapshotResponse {}
+
+message ListSnapshotsRequest {
+  string vm_id = 1;
+  map<string, string> label_selector = 2;
+}
+
+message ListSnapshotsResponse {
+  repeated Snapshot snapshots = 1;
+}
+
+message RestoreSnapshotRequest {
+  string snapshot_id = 1;
+  string target_vm_id = 2;
+}
+
+message RestoreSnapshotResponse {
+  VM vm = 1;
+}
+
+// ============================================================================
+// Benchmark Messages
+// ============================================================================
+
+message BenchmarkSpec {
+  string vm_id = 1;
+  string suite_name = 2;
+  repeated string test_names = 3;
+  int32 timeout_seconds = 4;
+  map<string, string> parameters = 5;
+}
+
+message BenchmarkResult {
+  string test_name = 1;
+  bool passed = 2;
+  double score = 3;
+  string unit = 4;
+  int64 duration_ms = 5;
+  map<string, string> metadata = 6;
+}
+
+message BenchmarkReceipt {
+  string run_id = 1;
+  string digest = 2;
+  bytes signature = 3;
+  int64 timestamp = 4;
+  string signer_public_key = 5;
+}
+
+message BenchmarkRun {
+  ResourceMeta meta = 1;
+  BenchmarkSpec spec = 2;
+  repeated BenchmarkResult results = 3;
+  BenchmarkReceipt receipt = 4;
+  string attestation_id = 5;
+}
+
+message CreateBenchmarkRunRequest {
+  string name = 1;
+  BenchmarkSpec spec = 2;
+  map<string, string> labels = 3;
+}
+
+message CreateBenchmarkRunResponse {
+  BenchmarkRun run = 1;
+}
+
+message GetBenchmarkRunRequest {
+  string id = 1;
+}
+
+message GetBenchmarkRunResponse {
+  BenchmarkRun run = 1;
+}
+
+message ListBenchmarkRunsRequest {
+  string vm_id = 1;
+  map<string, string> label_selector = 2;
+}
+
+message ListBenchmarkRunsResponse {
+  repeated BenchmarkRun runs = 1;
+}
+
+// ============================================================================
+// Attestation Messages
+// ============================================================================
+
+message HostProvenance {
+  string qemu_version = 1;
+  repeated string qemu_args = 2;
+  string base_image_hash = 3;
+  map<string, string> volume_hashes = 4;
+  string macos_version = 5;
+  string cpu_model = 6;
+  bool hvf_enabled = 7;
+  string hostname = 8;
+  int64 timestamp = 9;
+}
+
+message AttestationReport {
+  string id = 1;
+  string vm_id = 2;
+  HostProvenance host_provenance = 3;
+  string digest = 4;
+  bytes signature = 5;
+  int64 created_at = 6;
+  string attestation_type = 7;  // "host_provenance", "vtpm", etc.
+}
+
+message GetAttestationRequest {
+  string vm_id = 1;
+}
+
+message GetAttestationResponse {
+  AttestationReport report = 1;
+}
+
+// ============================================================================
+// LoRa Device Messages
+// ============================================================================
+
+message LoRaDeviceSpec {
+  string vm_id = 1;
+  string region = 2;  // "EU868", "US915", etc.
+  string device_eui = 3;
+  string app_eui = 4;
+  bytes app_key = 5;
+  int32 spreading_factor = 6;
+  int32 bandwidth_khz = 7;
+  float loss_rate = 8;
+  int32 latency_ms = 9;
+}
+
+message LoRaDeviceStatus {
+  bool connected = 1;
+  int64 packets_sent = 2;
+  int64 packets_received = 3;
+  float rssi_dbm = 4;
+  float snr_db = 5;
+}
+
+message LoRaDevice {
+  ResourceMeta meta = 1;
+  LoRaDeviceSpec spec = 2;
+  LoRaDeviceStatus status = 3;
+}
+
+message CreateLoRaDeviceRequest {
+  string name = 1;
+  LoRaDeviceSpec spec = 2;
+}
+
+message CreateLoRaDeviceResponse {
+  LoRaDevice device = 1;
+}
+
+message GetLoRaDeviceRequest {
+  string id = 1;
+}
+
+message GetLoRaDeviceResponse {
+  LoRaDevice device = 1;
+}
+
+message DeleteLoRaDeviceRequest {
+  string id = 1;
+}
+
+message DeleteLoRaDeviceResponse {}
+
+// ============================================================================
+// Health Messages
+// ============================================================================
+
+message GetHealthRequest {}
+
+message GetHealthResponse {
+  bool healthy = 1;
+  string version = 2;
+  int64 uptime_seconds = 3;
+}
+
+message GetDaemonStatusRequest {}
+
+message GetDaemonStatusResponse {
+  int32 running_vms = 1;
+  int32 total_vms = 2;
+  int64 memory_used_bytes = 3;
+  int64 disk_used_bytes = 4;
+  string store_path = 5;
+  bool qemu_available = 6;
+  string qemu_version = 7;
+  bool hvf_available = 8;
+}

@@ -1,0 +1,50 @@
+[package]
+name = "infrasim-provider"
+version = "0.1.0"
+edition = "2021"
+authors = ["InfraSim Authors"]
+description = "Terraform Provider for InfraSim QEMU Platform"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/infrasim/infrasim"
+
+[[bin]]
+name = "terraform-provider-infrasim"
+path = "src/main.rs"
+
+[dependencies]
+infrasim-common = { path = "../common" }
+
+# gRPC client for daemon communication
+tonic = { workspace = true }
+prost = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# UUID for resource IDs
+uuid = { workspace = true }
+
+# Base64 for state encoding
+base64 = "0.22"
+
+# MessagePack for Terraform dynamic values
+rmpv = "1.3"
+rmp-serde = "1.3"
+
+# Async trait for service implementation
+async-trait = "0.1"
+
+[build-dependencies]
+tonic-build = { workspace = true }

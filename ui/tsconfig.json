@@ -1,0 +1,8 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/infrasim-ui" },
+    { "path": "packages/api-client" },
+    { "path": "apps/console" }
+  ]
+}

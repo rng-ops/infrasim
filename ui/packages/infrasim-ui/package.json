@@ -1,0 +1,35 @@
+{
+  "name": "@infrasim/ui",
+  "version": "0.0.1",
+  "private": false,
+  "main": "dist/index.cjs",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "style": "dist/index.css",
+  "sideEffects": [
+    "*.css"
+  ],
+  "scripts": {
+    "build": "tsup src/index.tsx --format cjs,esm --dts --minify",
+    "dev": "tsup src/index.tsx --format cjs,esm --dts --watch",
+    "lint": "eslint 'src/**/*.{ts,tsx}'",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm build"
+  },
+  "peerDependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "dependencies": {
+    "clsx": "2.1.1"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.10",
+    "@types/react-dom": "18.3.0",
+    "eslint": "9.12.0",
+    "eslint-config-prettier": "9.1.0",
+    "eslint-plugin-react": "7.37.2",
+    "tsup": "8.3.0",
+    "typescript": "5.5.4"
+  }
+}

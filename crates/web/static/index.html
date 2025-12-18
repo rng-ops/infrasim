@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>InfraSim - VM Console</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #eee;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 60px;
+        }
+        h1 {
+            font-size: 3em;
+            margin-bottom: 10px;
+            background: linear-gradient(90deg, #e94560, #ff6b6b);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .subtitle {
+            color: #888;
+            font-size: 1.2em;
+        }
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+            margin-top: 40px;
+        }
+        .card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 16px;
+            padding: 30px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+        }
+        .card h2 {
+            color: #e94560;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .card p {
+            color: #aaa;
+            line-height: 1.6;
+        }
+        .vm-list {
+            margin-top: 20px;
+        }
+        .vm-item {
+            background: rgba(0, 0, 0, 0.2);
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .vm-item .name {
+            font-weight: bold;
+            color: #4ecca3;
+        }
+        .btn {
+            background: #e94560;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: background 0.3s;
+        }
+        .btn:hover {
+            background: #ff6b6b;
+        }
+        .btn.secondary {
+            background: transparent;
+            border: 1px solid #e94560;
+        }
+        .status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+        .status.running {
+            background: rgba(78, 204, 163, 0.2);
+            color: #4ecca3;
+        }
+        .status.stopped {
+            background: rgba(233, 69, 96, 0.2);
+            color: #e94560;
+        }
+        footer {
+            text-align: center;
+            margin-top: 80px;
+            color: #666;
+        }
+        .no-vms {
+            text-align: center;
+            color: #666;
+            padding: 40px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🚀 InfraSim</h1>
+            <p class="subtitle">Terraform-Compatible QEMU Platform for macOS</p>
+        </header>
+
+        <div class="cards">
+            <div class="card">
+                <h2>📺 Virtual Machines</h2>
+                <p>Access your running VMs via browser-based VNC console.</p>
+                <div class="vm-list" id="vm-list">
+                    <div class="no-vms">Loading VMs...</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>⚡ Quick Start</h2>
+                <p>Get started with InfraSim in minutes:</p>
+                <pre style="background: rgba(0,0,0,0.3); padding: 15px; border-radius: 8px; margin-top: 15px; overflow-x: auto;">
+# Install QEMU
+brew install qemu
+
+# Start the daemon
+infrasimd --foreground
+
+# Apply Terraform config
+tofu apply</pre>
+            </div>
+
+            <div class="card">
+                <h2>📊 System Status</h2>
+                <p id="status-info">Checking daemon status...</p>
+                <div style="margin-top: 20px;">
+                    <div id="hvf-status"></div>
+                    <div id="qemu-status"></div>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            <p>InfraSim • Terraform-Compatible QEMU Platform</p>
+            <p style="margin-top: 10px;">
+                <a href="/api/health" style="color: #e94560;">API Health</a> •
+                <a href="https://github.com/infrasim/infrasim" style="color: #e94560;">GitHub</a>
+            </p>
+        </footer>
+    </div>
+
+    <script>
+        async function loadVMs() {
+            try {
+                const response = await fetch('/api/vms');
+                const data = await response.json();
+                const container = document.getElementById('vm-list');
+                
+                if (data.vms && data.vms.length > 0) {
+                    container.innerHTML = data.vms.map(vm => `
+                        <div class="vm-item">
+                            <div>
+                                <span class="name">${vm.id}</span>
+                                <span class="status running">Running</span>
+                            </div>
+                            <a href="${vm.web_url}" class="btn">Open Console</a>
+                        </div>
+                    `).join('');
+                } else {
+                    container.innerHTML = '<div class="no-vms">No VMs running. Create one with Terraform!</div>';
+                }
+            } catch (e) {
+                document.getElementById('vm-list').innerHTML = 
+                    '<div class="no-vms">Unable to connect to daemon</div>';
+            }
+        }
+
+        async function checkStatus() {
+            try {
+                const response = await fetch('/api/health');
+                const data = await response.json();
+                
+                document.getElementById('status-info').innerHTML = `
+                    <span class="status running">Daemon Online</span>
+                `;
+            } catch (e) {
+                document.getElementById('status-info').innerHTML = `
+                    <span class="status stopped">Daemon Offline</span>
+                `;
+            }
+        }
+
+        loadVMs();
+        checkStatus();
+        
+        // Refresh every 5 seconds
+        setInterval(loadVMs, 5000);
+        setInterval(checkStatus, 5000);
+    </script>
+</body>
+</html>

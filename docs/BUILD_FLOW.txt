@@ -1,0 +1,182 @@
+```
+InfraSim Build Pipeline Flow
+═════════════════════════════════════════════════════════════════════
+
+┌────────────────────────────────────────────────────────────────────┐
+│                          INPUT SOURCES                             │
+├────────────────────────────────────────────────────────────────────┤
+│  • Rust source files (crates/*/src/*)                              │
+│  • Proto definitions (proto/*.proto)                               │
+│  • Cargo.toml manifests                                            │
+│  • Build scripts (build.rs)                                        │
+│  • Git version tag                                                 │
+└──────────────────────┬─────────────────────────────────────────────┘
+                       │
+                       ▼
+┌────────────────────────────────────────────────────────────────────┐
+│                    STEP 1: CLEAN                                   │
+│  cargo clean                                                       │
+│  rm -rf dist/                                                      │
+└──────────────────────┬─────────────────────────────────────────────┘
+                       │
+                       ▼
+┌────────────────────────────────────────────────────────────────────┐
+│                STEP 2: DEPENDENCY CHECK                            │
+│  • protoc (Protocol Buffers compiler)                              │
+│  • rustc (Rust compiler)                                           │
+│  • cargo (Rust build tool)                                         │
+└──────────────────────┬─────────────────────────────────────────────┘
+                       │
+                       ▼
+┌────────────────────────────────────────────────────────────────────┐
+│            STEP 3: PROTO CODE GENERATION                           │
+│  tonic-build reads proto/*.proto                                   │
+│  Generates: crates/*/src/generated/*.rs                            │
+│  • infrasim.v1.rs (main service)                                   │
+│  • tfplugin6.rs (Terraform protocol)                               │
+└──────────────────────┬─────────────────────────────────────────────┘
+                       │
+                       ▼
+┌────────────────────────────────────────────────────────────────────┐
+│                STEP 4: COMPILATION                                 │
+│  cargo build --release --all                                       │
+│                                                                    │
+│  Compiles in parallel:                                             │
+│  ┌──────────────────┐  ┌──────────────────┐                       │
+│  │ infrasim-common  │  │ infrasim-daemon  │                       │
+│  └────────┬─────────┘  └────────┬─────────┘                       │
+│           │                     │                                  │
+│  ┌────────▼─────────┐  ┌────────▼─────────┐  ┌──────────────────┐│
+│  │ infrasim-web     │  │ infrasim-cli     │  │infrasim-provider ││
+│  └──────────────────┘  └──────────────────┘  └──────────────────┘│
+│                                                                    │
+│  Output: target/release/{infrasim, infrasimd,                     │
+│                          terraform-provider-infrasim}             │
+└──────────────────────┬─────────────────────────────────────────────┘
+                       │
+                       ▼
+┌────────────────────────────────────────────────────────────────────┐
+│                  STEP 5: TESTING                                   │
+│  cargo test --all                                                  │
+│  • Unit tests: 20 passed                                           │
+│  • Integration tests: 0 (to be added)                              │
+└──────────────────────┬─────────────────────────────────────────────┘
+                       │
+                       ▼
+┌────────────────────────────────────────────────────────────────────┐
+│              STEP 6: ARTIFACT GENERATION                           │
+│                                                                    │
+│  For each binary:                                                  │
+│  1. Copy to dist/                                                  │
+│  2. Strip debug symbols (strip command)                            │
+│  3. Create tarball (.tar.gz)                                       │
+│  4. Generate SHA256 checksum                                       │
+│                                                                    │
+│  Artifacts:                                                        │
+│  • infrasim (3.1M → 1.4M compressed)                               │
+│  • infrasimd (4.9M → 2.3M compressed)                              │
+│  • terraform-provider-infrasim (3.0M → 1.3M compressed)            │
+└──────────────────────┬─────────────────────────────────────────────┘
+                       │
+                       ▼
+┌────────────────────────────────────────────────────────────────────┐
+│          STEP 7: TERRAFORM PROVIDER BUNDLE                         │
+│                                                                    │
+│  Creates directory structure:                                      │
+│  terraform-providers/                                              │
+│    registry.terraform.io/                                          │
+│      infrasim/infrasim/{VERSION}/darwin_arm64/                     │
+│        ├── terraform-provider-infrasim_v{VERSION}                  │
+│        └── terraform-provider-infrasim_{VERSION}_manifest.json     │
+└──────────────────────┬─────────────────────────────────────────────┘
+                       │
+                       ▼
+┌────────────────────────────────────────────────────────────────────┐
+│              STEP 8: BUILD MANIFEST                                │
+│                                                                    │
+│  Generates dist/manifest.json with:                                │
+│  • Version (from git tag)                                          │
+│  • Build timestamp (UTC)                                           │
+│  • Target architecture                                             │
+│  • Artifact metadata (name, file, size, sha256)                    │
+└──────────────────────┬─────────────────────────────────────────────┘
+                       │
+                       ▼
+┌────────────────────────────────────────────────────────────────────┐
+│                     OUTPUT ARTIFACTS                               │
+├────────────────────────────────────────────────────────────────────┤
+│  dist/                                                             │
+│  ├── infrasim (stripped binary)                                    │
+│  ├── infrasimd (stripped binary)                                   │
+│  ├── terraform-provider-infrasim (stripped binary)                 │
+│  ├── infrasim-{VERSION}-{TARGET}.tar.gz                            │
+│  ├── infrasimd-{VERSION}-{TARGET}.tar.gz                           │
+│  ├── terraform-provider-infrasim-{VERSION}-{TARGET}.tar.gz         │
+│  ├── *.sha256 (checksums)                                          │
+│  ├── manifest.json                                                 │
+│  └── terraform-providers/ (provider bundle directory)              │
+│                                                                    │
+│  Total: ~5MB compressed, ~11MB uncompressed                        │
+└────────────────────────────────────────────────────────────────────┘
+
+
+Alternative Build Paths
+═══════════════════════
+
+┌─────────────┐
+│ Developer   │
+└──────┬──────┘
+       │
+       ├─────► make dev ────► Quick debug build
+       │
+       ├─────► make test ───► Run tests only
+       │
+       ├─────► make watch ──► Auto-rebuild on changes
+       │
+       └─────► make install ► Build + install to system
+
+
+┌─────────────┐
+│ CI/CD       │
+└──────┬──────┘
+       │
+       ├─────► GitHub Actions ──► Full pipeline + release
+       │
+       └─────► make ci ─────────► Local CI simulation
+
+
+┌─────────────┐
+│ Production  │
+└──────┬──────┘
+       │
+       ├─────► ./build.sh ───────► Complete release build
+       │
+       └─────► make package ─────► Create distribution
+
+
+Build Metrics
+═════════════
+
+Typical Build Times (Apple M2, 16GB):
+┌─────────────────────────┬──────────┐
+│ Operation               │ Duration │
+├─────────────────────────┼──────────┤
+│ Clean build (release)   │   67s    │
+│ Incremental build       │    5s    │
+│ Protobuf generation     │    2s    │
+│ Test suite              │    3s    │
+│ Artifact packaging      │    1s    │
+│ Full pipeline           │   75s    │
+└─────────────────────────┴──────────┘
+
+Artifact Sizes:
+┌─────────────────────────┬──────────┬───────────┬────────────┐
+│ Binary                  │ Original │ Stripped  │ Compressed │
+├─────────────────────────┼──────────┼───────────┼────────────┤
+│ infrasim                │   5.4M   │   3.1M    │    1.4M    │
+│ infrasimd               │   8.2M   │   4.9M    │    2.3M    │
+│ terraform-provider-*    │   5.1M   │   3.0M    │    1.3M    │
+├─────────────────────────┼──────────┼───────────┼────────────┤
+│ Total                   │  18.7M   │  11.0M    │    5.0M    │
+└─────────────────────────┴──────────┴───────────┴────────────┘
+```

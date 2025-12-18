@@ -1,0 +1,28 @@
+# Smoke Test
+# Quick sanity check that the app loads
+
+name: smoke
+description: Basic smoke test to verify the app loads
+tags:
+  - smoke
+  - quick
+
+viewport:
+  width: 1280
+  height: 720
+
+steps:
+  # App should load without errors
+  - action: navigate
+    url: /
+
+  # Wait for something to render
+  - action: sleep
+    ms: 500
+
+  # Should either be at login or have the app shell
+  - action: log
+    message: App loaded successfully
+
+  - action: screenshot
+    name: smoke-test

@@ -1,0 +1,72 @@
+# Login Flow Test
+# Tests the TOTP authentication flow
+
+name: login-flow
+description: Test the login page UI and authentication flow
+tags:
+  - auth
+  - smoke
+  - critical
+
+viewport:
+  width: 1280
+  height: 720
+
+visual_regression: true
+visual_threshold: 1.0
+
+steps:
+  # Navigate to the app - should redirect to login
+  - action: navigate
+    url: /
+    wait_for_selector: '[data-testid="login-page"]'
+
+  # Verify login page elements
+  - action: assert
+    selector: '[data-testid="login-page"]'
+    visible: true
+
+  - action: assert
+    selector: '[data-testid="login-identifier-input"]'
+    visible: true
+
+  - action: assert
+    selector: '[data-testid="login-code-input"]'
+    visible: true
+
+  - action: assert
+    selector: '[data-testid="login-setup-button"]'
+    visible: true
+
+  - action: assert
+    selector: '[data-testid="login-submit-button"]'
+    visible: true
+
+  # Take a screenshot of the login page
+  - action: screenshot
+    name: login-page-initial
+
+  # Fill in the identifier
+  - action: fill
+    selector: '[data-testid="login-identifier-input"]'
+    value: testuser
+
+  # Try to login without setting up (should fail)
+  - action: fill
+    selector: '[data-testid="login-code-input"]'
+    value: '000000'
+
+  - action: click
+    selector: '[data-testid="login-submit-button"]'
+
+  # Wait for error to appear
+  - action: wait
+    selector: '[data-testid="login-error"]'
+    timeout_ms: 5000
+
+  - action: assert
+    selector: '[data-testid="login-error"]'
+    visible: true
+
+  - action: screenshot
+    name: login-page-error

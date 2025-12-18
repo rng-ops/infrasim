@@ -1,0 +1,27 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: infrasim-alpine-build
+spec:
+  template:
+    spec:
+      containers:
+      - name: terraform-planner
+        image: infrasim-terraform:latest
+        command: ["terraform", "plan", "-out=plan.tfplan"]
+        volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+      - name: qemu-builder
+        image: infrasim-builder:latest
+        command: ["./build-alpine.sh"]
+        volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+        env:
+        - name: DAEMON_ADDR
+          value: "http://infrasim-daemon:50051"
+      volumes:
+      - name: workspace
+        emptyDir: {}
+      restartPolicy: Never

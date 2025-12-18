@@ -1,0 +1,17 @@
+FROM alpine:latest
+
+# Install Terraform
+RUN apk add --no-cache wget unzip && \
+    wget https://releases.hashicorp.com/terraform/1.5.7/terraform_1.5.7_linux_amd64.zip && \
+    unzip terraform_1.5.7_linux_amd64.zip && \
+    mv terraform /usr/local/bin/ && \
+    rm terraform_1.5.7_linux_amd64.zip
+
+# Create workspace
+WORKDIR /workspace
+
+# Copy Terraform files
+COPY *.tf /workspace/
+
+# Default command
+CMD ["terraform", "plan"]
