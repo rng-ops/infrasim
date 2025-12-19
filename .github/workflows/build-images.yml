@@ -55,6 +55,7 @@ jobs:
         sudo apt-get install -y \
           qemu-utils \
           qemu-system-arm \
+          qemu-system-aarch64 \
           qemu-efi-aarch64 \
           genisoimage \
           jq \
@@ -116,7 +117,9 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y \
           qemu-system-arm \
-          qemu-efi-aarch64
+          qemu-system-aarch64 \
+          qemu-efi-aarch64 \
+          qemu-utils
     
     - name: Download build output
       uses: actions/download-artifact@v4
@@ -130,10 +133,11 @@ jobs:
         chmod +x images/alpine/boot-test.sh
         cd images/alpine
         
-        # Run boot test with extended timeout for CI
-        export BOOT_TIMEOUT=180
+        # Run boot test with extended timeout for CI (cross-arch emulation is slow)
+        export BOOT_TIMEOUT=300
         export QEMU_MEMORY=512
         export QEMU_CPUS=2
+        export IMAGE_ARCH=aarch64
         
         if ./boot-test.sh output/base.qcow2; then
           echo "boot_status=success" >> $GITHUB_OUTPUT

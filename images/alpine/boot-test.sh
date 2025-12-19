@@ -18,22 +18,40 @@ TIMEOUT="${BOOT_TIMEOUT:-120}"
 QEMU_MEMORY="${QEMU_MEMORY:-512}"
 QEMU_CPUS="${QEMU_CPUS:-2}"
 
-# Detect architecture and set QEMU binary
-ARCH=$(uname -m)
-case "$ARCH" in
+# Image architecture (the Alpine image is built for aarch64)
+IMAGE_ARCH="${IMAGE_ARCH:-aarch64}"
+
+# Detect host architecture for acceleration choice
+HOST_ARCH=$(uname -m)
+HOST_OS=$(uname -s)
+
+# Configure QEMU based on image architecture
+case "$IMAGE_ARCH" in
     arm64|aarch64)
         QEMU_BIN="qemu-system-aarch64"
-        QEMU_MACHINE="-M virt -cpu host"
-        # Try HVF on macOS, fall back to TCG
-        if [[ "$(uname -s)" == "Darwin" ]]; then
-            QEMU_ACCEL="-accel hvf"
+        
+        # Set machine and CPU based on host capabilities
+        if [[ "$HOST_ARCH" == "aarch64" || "$HOST_ARCH" == "arm64" ]]; then
+            QEMU_MACHINE="-M virt -cpu host"
+            # Try HVF on macOS, KVM on Linux, fall back to TCG
+            if [[ "$HOST_OS" == "Darwin" ]]; then
+                QEMU_ACCEL="-accel hvf"
+            elif [[ -e /dev/kvm ]]; then
+                QEMU_ACCEL="-accel kvm"
+            else
+                QEMU_ACCEL="-accel tcg"
+            fi
         else
+            # Cross-architecture emulation (x86_64 host running aarch64 guest)
+            QEMU_MACHINE="-M virt -cpu cortex-a72"
             QEMU_ACCEL="-accel tcg"
         fi
+        
         # Find UEFI firmware
         UEFI_PATHS=(
             "/opt/homebrew/share/qemu/edk2-aarch64-code.fd"
             "/usr/share/qemu/edk2-aarch64-code.fd"
+            "/usr/share/AAVMF/AAVMF_CODE.fd"
             "/usr/local/share/qemu/edk2-aarch64-code.fd"
         )
         BIOS_ARG=""
@@ -47,11 +65,15 @@ case "$ARCH" in
     x86_64)
         QEMU_BIN="qemu-system-x86_64"
         QEMU_MACHINE="-M q35"
-        QEMU_ACCEL="-accel tcg"
+        if [[ "$HOST_ARCH" == "x86_64" && -e /dev/kvm ]]; then
+            QEMU_ACCEL="-accel kvm"
+        else
+            QEMU_ACCEL="-accel tcg"
+        fi
         BIOS_ARG=""
         ;;
     *)
-        echo "Unsupported architecture: $ARCH"
+        echo "Unsupported image architecture: $IMAGE_ARCH"
         exit 1
         ;;
 esac
@@ -105,6 +127,7 @@ qemu-img create -f qcow2 -b "$(realpath "$DISK_FILE")" -F qcow2 "$OVERLAY_FILE"
 # Boot QEMU in background
 # =============================================================================
 log_info "Booting QEMU (timeout: ${TIMEOUT}s)..."
+log_info "Image arch: $IMAGE_ARCH, Host arch: $HOST_ARCH"
 log_info "QEMU: $QEMU_BIN $QEMU_MACHINE $QEMU_ACCEL"
 
 # Build QEMU command

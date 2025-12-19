@@ -80,6 +80,7 @@ jobs:
         sudo apt-get install -y \
           qemu-utils \
           qemu-system-arm \
+          qemu-system-aarch64 \
           qemu-efi-aarch64 \
           genisoimage \
           jq \
@@ -136,7 +137,11 @@ jobs:
     - name: Install QEMU
       run: |
         sudo apt-get update
-        sudo apt-get install -y qemu-system-arm qemu-efi-aarch64
+        sudo apt-get install -y \
+          qemu-system-arm \
+          qemu-system-aarch64 \
+          qemu-efi-aarch64 \
+          qemu-utils
     
     - name: Download build
       uses: actions/download-artifact@v4
@@ -150,7 +155,8 @@ jobs:
         chmod +x images/alpine/boot-test.sh
         cd images/alpine
         
-        export BOOT_TIMEOUT=180
+        export BOOT_TIMEOUT=300
+        export IMAGE_ARCH=aarch64
         
         if ./boot-test.sh output/base.qcow2 2>&1; then
           echo "status=success" >> $GITHUB_OUTPUT
