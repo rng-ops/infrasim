@@ -4,7 +4,6 @@
 //! InfraSim virtual machines, networks, volumes, and more.
 
 use clap::{Parser, Subcommand};
-use tracing::info;
 
 mod commands;
 mod client;
@@ -14,7 +13,7 @@ mod generated {
     include!("generated/infrasim.v1.rs");
 }
 
-use commands::{vm, network, volume, console, snapshot, benchmark, attestation, web};
+use commands::{vm, network, volume, console, snapshot, benchmark, attestation, web, git};
 
 /// InfraSim CLI - Terraform-Compatible QEMU Platform
 #[derive(Parser)]
@@ -70,6 +69,10 @@ enum Commands {
     #[command(subcommand)]
     Web(web::WebCommands),
 
+    /// Git utilities for branch management
+    #[command(subcommand)]
+    Git(git::GitCommands),
+
     /// Check daemon status
     Status,
 
@@ -103,6 +106,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Benchmark(args) => benchmark::execute(args, client?, cli.format).await?,
         Commands::Attestation(cmd) => attestation::execute(cmd, client?, cli.format).await?,
         Commands::Web(cmd) => web::execute(cmd).await?,
+        Commands::Git(cmd) => git::execute(cmd, cli.format).await?,
         Commands::Status => {
             match client {
                 Ok(mut c) => {
