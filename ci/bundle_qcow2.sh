@@ -407,28 +407,33 @@ EOF
 # =============================================================================
 log_info "Creating tarball: $OUTPUT_FILE"
 
-mkdir -p "$(dirname "$OUTPUT_FILE")"
+# Convert to absolute path and create parent directory
+OUTPUT_FILE_ABS="$(cd "$(dirname "$OUTPUT_FILE")" 2>/dev/null && pwd)/$(basename "$OUTPUT_FILE")" || {
+    # If directory doesn't exist, create it first
+    mkdir -p "$(dirname "$OUTPUT_FILE")"
+    OUTPUT_FILE_ABS="$(cd "$(dirname "$OUTPUT_FILE")" && pwd)/$(basename "$OUTPUT_FILE")"
+}
 
 # Create tarball with deterministic ordering
-(cd "$BUNDLE_DIR" && tar --sort=name -czf "$OUTPUT_FILE" .)
+(cd "$BUNDLE_DIR" && tar --sort=name -czf "$OUTPUT_FILE_ABS" .)
 
 # Compute tarball hash
 if command -v sha256sum &>/dev/null; then
-    TARBALL_HASH=$(sha256sum "$OUTPUT_FILE" | awk '{print $1}')
+    TARBALL_HASH=$(sha256sum "$OUTPUT_FILE_ABS" | awk '{print $1}')
 else
-    TARBALL_HASH=$(shasum -a 256 "$OUTPUT_FILE" | awk '{print $1}')
+    TARBALL_HASH=$(shasum -a 256 "$OUTPUT_FILE_ABS" | awk '{print $1}')
 fi
 
-echo "$TARBALL_HASH  $(basename "$OUTPUT_FILE")" > "${OUTPUT_FILE}.sha256"
+echo "$TARBALL_HASH  $(basename "$OUTPUT_FILE_ABS")" > "${OUTPUT_FILE_ABS}.sha256"
 
 # =============================================================================
 # Summary
 # =============================================================================
 log_info "Bundle created successfully!"
 echo ""
-echo "  Output: $OUTPUT_FILE"
+echo "  Output: $OUTPUT_FILE_ABS"
 echo "  SHA256: $TARBALL_HASH"
-echo "  Size:   $(du -h "$OUTPUT_FILE" | cut -f1)"
+echo "  Size:   $(du -h "$OUTPUT_FILE_ABS" | cut -f1)"
 echo ""
-echo "  Checksum file: ${OUTPUT_FILE}.sha256"
+echo "  Checksum file: ${OUTPUT_FILE_ABS}.sha256"
 echo ""
