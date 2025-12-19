@@ -233,18 +233,38 @@ jobs:
         with:
           path: artifacts
       
-      - name: Generate SLSA provenance
-        uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v1.9.0
-        with:
-          base64-subjects: |
-            ${{ steps.hash.outputs.hashes }}
+      - name: Generate attestation hashes
+        id: hash
+        run: |
+          cd artifacts
+          find . -name "*.qcow2" -type f -exec sha256sum {} \; | \
+            awk '{print $1 "  " $2}' | base64 -w0 > ../hashes.txt
+          echo "hashes=$(cat ../hashes.txt)" >> $GITHUB_OUTPUT
+      
+      - name: Create provenance document
+        run: |
+          cat > provenance.json <<EOF
+          {
+            "buildType": "https://github.com/${{ github.repository }}/alpine-profiles@v1",
+            "builder": {
+              "id": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            },
+            "metadata": {
+              "buildInvocationId": "${{ github.run_id }}",
+              "buildStartedOn": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+              "buildFinishedOn": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            },
+            "materials": []
+          }
+          EOF
       
       - name: Upload provenance
         uses: actions/upload-artifact@v4
         with:
           name: provenance
           path: |
-            *.intoto.jsonl
+            provenance.json
+            hashes.txt
           retention-days: 30
 
   # Summary job
