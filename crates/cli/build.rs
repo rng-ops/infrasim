@@ -12,6 +12,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .build_client(true)
             .out_dir("src/generated")
             .compile(&[proto_file], &[proto_dir])?;
+    } else {
+        // Try alternative path
+        let alt_proto_file = "proto/infrasim.proto";
+        if std::path::Path::new(alt_proto_file).exists() {
+            println!("cargo:rerun-if-changed={}", alt_proto_file);
+            
+            tonic_build::configure()
+                .build_server(false)
+                .build_client(true)
+                .out_dir("src/generated")
+                .compile(&[alt_proto_file], &["proto"])?;
+        } else {
+            // Create empty generated file if proto doesn't exist
+            let generated_path = std::path::Path::new("src/generated/infrasim.rs");
+            if !generated_path.exists() {
+                std::fs::write(generated_path, "// Proto file not found during build\n")?;
+            }
+        }
     }
 
     Ok(())
