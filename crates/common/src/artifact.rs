@@ -820,16 +820,18 @@ mod tests {
 
     #[test]
     fn test_parse_sha256_file_with_filename() {
-        let content = "abc123def456abc123def456abc123def456abc123def456abc123def456abcd1234  alpine.tar.gz\n";
+        // SHA256 hash is exactly 64 hex characters
+        let content = "abc123def456abc123def456abc123def456abc123def456abc123def456abcd  alpine.tar.gz\n";
         let hash = parse_sha256_file(content);
-        assert_eq!(hash, Some("abc123def456abc123def456abc123def456abc123def456abc123def456abcd1234".to_string()));
+        assert_eq!(hash, Some("abc123def456abc123def456abc123def456abc123def456abc123def456abcd".to_string()));
     }
 
     #[test]
     fn test_parse_sha256_file_hash_only() {
-        let content = "abc123def456abc123def456abc123def456abc123def456abc123def456abcd1234\n";
+        // SHA256 hash is exactly 64 hex characters
+        let content = "abc123def456abc123def456abc123def456abc123def456abc123def456abcd\n";
         let hash = parse_sha256_file(content);
-        assert_eq!(hash, Some("abc123def456abc123def456abc123def456abc123def456abc123def456abcd1234".to_string()));
+        assert_eq!(hash, Some("abc123def456abc123def456abc123def456abc123def456abc123def456abcd".to_string()));
     }
 
     #[test]
