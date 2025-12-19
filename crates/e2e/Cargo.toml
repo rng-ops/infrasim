@@ -52,3 +52,6 @@ hex = "0.4"
 [dev-dependencies]
 # For running as tests
 test-case = "3"
+
+# Shared InfraSim primitives used by integration tests
+infrasim-common = { path = "../common" }

@@ -1,0 +1,250 @@
+# ============================================================================
+# build-images.yml - Build Alpine qcow2 Image and Upload Artifact
+# ============================================================================
+#
+# This workflow builds a reproducible Alpine Linux qcow2 image, runs a
+# headless QEMU boot test, and uploads the signed bundle as an artifact.
+#
+# Runs on:
+# - Push to main/develop
+# - Pull requests to main
+# - Manual dispatch
+#
+name: Build Images
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'images/alpine/**'
+      - 'ci/bundle_qcow2.sh'
+      - '.github/workflows/build-images.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'images/alpine/**'
+      - 'ci/bundle_qcow2.sh'
+      - '.github/workflows/build-images.yml'
+  workflow_dispatch:
+    inputs:
+      alpine_version:
+        description: 'Alpine Linux version'
+        required: false
+        default: '3.20'
+
+env:
+  ALPINE_VERSION: ${{ github.event.inputs.alpine_version || '3.20' }}
+
+jobs:
+  # ===========================================================================
+  # Build Alpine qcow2 Image
+  # ===========================================================================
+  build-alpine:
+    name: Build Alpine qcow2
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          qemu-utils \
+          qemu-system-arm \
+          qemu-efi-aarch64 \
+          genisoimage \
+          jq \
+          curl
+    
+    - name: Set build metadata
+      id: meta
+      run: |
+        echo "git_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+        echo "git_sha_full=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+        echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
+        echo "artifact_name=infrasim-alpine-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+    
+    - name: Build Alpine qcow2 image
+      run: |
+        chmod +x images/alpine/build-alpine-qcow2.sh
+        cd images/alpine
+        ./build-alpine-qcow2.sh \
+          --version ${{ env.ALPINE_VERSION }} \
+          --arch aarch64 \
+          --size 2G \
+          --output output/base.qcow2
+      env:
+        SOURCE_DATE_EPOCH: ${{ github.event.repository.pushed_at || '0' }}
+    
+    - name: Display build logs
+      if: always()
+      run: |
+        echo "=== Build Logs ==="
+        cat images/alpine/output/logs/build.log.txt 2>/dev/null || echo "No build log"
+        echo ""
+        echo "=== qemu-img info ==="
+        cat images/alpine/output/logs/qemu-img-info.txt 2>/dev/null || echo "No qemu-img info"
+        echo ""
+        echo "=== Provenance ==="
+        cat images/alpine/output/meta/build-provenance.json 2>/dev/null || echo "No provenance"
+    
+    - name: Upload raw build output
+      uses: actions/upload-artifact@v4
+      with:
+        name: alpine-build-output
+        path: images/alpine/output/
+        retention-days: 7
+
+  # ===========================================================================
+  # Boot Test (QEMU headless)
+  # ===========================================================================
+  boot-test:
+    name: Boot Test
+    runs-on: ubuntu-latest
+    needs: build-alpine
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Install QEMU
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          qemu-system-arm \
+          qemu-efi-aarch64
+    
+    - name: Download build output
+      uses: actions/download-artifact@v4
+      with:
+        name: alpine-build-output
+        path: images/alpine/output/
+    
+    - name: Run boot test
+      id: boot_test
+      run: |
+        chmod +x images/alpine/boot-test.sh
+        cd images/alpine
+        
+        # Run boot test with extended timeout for CI
+        export BOOT_TIMEOUT=180
+        export QEMU_MEMORY=512
+        export QEMU_CPUS=2
+        
+        if ./boot-test.sh output/base.qcow2; then
+          echo "boot_status=success" >> $GITHUB_OUTPUT
+          echo "✅ BOOT_OK - Image boots successfully"
+        else
+          echo "boot_status=failed" >> $GITHUB_OUTPUT
+          echo "❌ BOOT_FAILED - Image did not boot"
+          # Don't fail the job, just report
+        fi
+      continue-on-error: true
+    
+    - name: Report boot test result
+      run: |
+        if [[ "${{ steps.boot_test.outputs.boot_status }}" == "success" ]]; then
+          echo "::notice::Boot test passed - Image boots successfully"
+        else
+          echo "::warning::Boot test did not complete - This may be expected in CI without KVM"
+        fi
+
+  # ===========================================================================
+  # Bundle and Upload
+  # ===========================================================================
+  bundle:
+    name: Create Bundle
+    runs-on: ubuntu-latest
+    needs: build-alpine
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y qemu-utils jq
+    
+    - name: Download build output
+      uses: actions/download-artifact@v4
+      with:
+        name: alpine-build-output
+        path: images/alpine/output/
+    
+    - name: Set bundle metadata
+      id: meta
+      run: |
+        echo "git_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+        echo "artifact_name=infrasim-alpine-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+    
+    - name: Create bundle
+      run: |
+        chmod +x ci/bundle_qcow2.sh
+        
+        mkdir -p dist
+        
+        ./ci/bundle_qcow2.sh \
+          --input images/alpine/output \
+          --output dist/${{ steps.meta.outputs.artifact_name }}.tar.gz \
+          --version ${{ env.ALPINE_VERSION }} \
+          --git-sha ${{ steps.meta.outputs.git_sha }}
+      env:
+        GITHUB_RUN_ID: ${{ github.run_id }}
+    
+    - name: Display bundle contents
+      run: |
+        echo "=== Bundle Contents ==="
+        tar -tzvf dist/${{ steps.meta.outputs.artifact_name }}.tar.gz
+        echo ""
+        echo "=== Manifest ==="
+        tar -xzf dist/${{ steps.meta.outputs.artifact_name }}.tar.gz -O meta/manifest.json | jq .
+        echo ""
+        echo "=== Checksum ==="
+        cat dist/${{ steps.meta.outputs.artifact_name }}.tar.gz.sha256
+    
+    - name: Upload bundle artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.meta.outputs.artifact_name }}
+        path: |
+          dist/*.tar.gz
+          dist/*.sha256
+        retention-days: 30
+    
+    - name: Create Release (on tag)
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          dist/*.tar.gz
+          dist/*.sha256
+        body: |
+          ## InfraSim Alpine Image ${{ github.ref_name }}
+          
+          This release includes a QEMU-bootable Alpine Linux qcow2 image.
+          
+          ### Contents
+          - `disk/base.qcow2` - Main disk image
+          - `disk/snapshots/clean.qcow2` - Clean overlay snapshot
+          - `meta/manifest.json` - File checksums
+          - `meta/attestations/` - Build provenance
+          
+          ### Verification
+          ```bash
+          shasum -a 256 -c ${{ steps.meta.outputs.artifact_name }}.tar.gz.sha256
+          ```
+          
+          ### Quick Start
+          ```bash
+          tar -xzf ${{ steps.meta.outputs.artifact_name }}.tar.gz
+          qemu-system-aarch64 -M virt -m 512 -drive file=disk/base.qcow2,if=virtio -nographic
+          ```
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

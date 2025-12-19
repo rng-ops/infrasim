@@ -1,0 +1,23 @@
+{
+  "gateway_host": "localhost",
+  "gateway_port": 1700,
+  "device_eui": "0000000000000000",
+  "app_key": "00000000000000000000000000000000",
+  "app_eui": "0000000000000000",
+  "region": "EU868",
+  "spreading_factor": 7,
+  "bandwidth_khz": 125,
+  "coding_rate": "4/5",
+  "frequency_mhz": 868.1,
+  "tx_power_dbm": 14,
+  "note": "This is a simulation/logging placeholder. Real LoRaWAN integration requires proper SDR hardware and is not included in this build.",
+  "simulation_mode": true,
+  "log_frames": true,
+  "log_path": "/var/log/infrasim-telemetry.log",
+  "udp_bind": "0.0.0.0:1700",
+  "future_integration": {
+    "packet_forwarder": "semtech-udp",
+    "concentrator": "sx1302",
+    "note": "These fields are placeholders for future integration with real LoRaWAN hardware"
+  }
+}
