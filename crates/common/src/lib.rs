@@ -2,16 +2,22 @@
 //!
 //! Shared types, utilities, and infrastructure for the InfraSim platform.
 
+pub mod artifact;
 pub mod cas;
 pub mod crypto;
 pub mod db;
 pub mod error;
+pub mod pipeline;
 pub mod qmp;
 pub mod types;
 pub mod attestation;
 pub mod traffic_shaper;
 
 // Re-export commonly used types
+pub use artifact::{ArtifactInspector, ArtifactInspectionReport};
+pub use pipeline::{
+    AnalysisReport, DependencyGraph, NetworkFingerprint, PipelineAnalyzer, TimingProbe,
+};
 pub use cas::ContentAddressedStore;
 pub use crypto::{KeyPair, Signer, Verifier};
 pub use db::Database;

@@ -28,17 +28,49 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 ### Installation
 
+There are two ways to install InfraSim:
+
+#### Option 1: ISVM (Recommended)
+
+ISVM (InfraSim Version Manager) provides NVM-style version management:
+
 ```bash
 # Clone the repository
-git clone https://github.com/infrasim/infrasim.git
+git clone https://github.com/rng-ops/infrasim.git
+cd infrasim
+
+# Install ISVM
+./scripts/install-isvm.sh
+
+# Restart shell or source config
+source ~/.zshrc  # or ~/.bashrc
+
+# Build and install current version
+make build
+isvm install
+
+# Verify installation
+infrasim --version
+```
+
+ISVM commands:
+- `isvm install` - Install current build
+- `isvm use <version>` - Switch to a version
+- `isvm list` - List installed versions
+- `isvm link` - Dev mode (symlink to project binaries)
+
+#### Option 2: Manual Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/rng-ops/infrasim.git
 cd infrasim
 
 # Build all components
 cargo build --release
 
 # Install binaries
-cargo install --path crates/daemon
-cargo install --path crates/cli
+make install
 ```
 
 ### Start the Daemon

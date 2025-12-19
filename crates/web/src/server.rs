@@ -1810,6 +1810,19 @@ impl WebServer {
             // Has its own WebAuthn auth - NOT protected by main app auth
             .nest_service("/api/meshnet", crate::meshnet::routes::meshnet_router(meshnet_db))
 
+            // Build Pipeline Analysis (dependency graphs, timing probes)
+            .nest_service("/api/analysis", crate::build_analysis::analysis_routes(
+                std::sync::Arc::new(crate::build_analysis::AnalysisCache::default())
+            ))
+
+            // Snapshot Browser with provenance and memory pinning
+            .nest_service("/api/snapshot-browser", crate::snapshot_browser::snapshot_browser_routes(
+                std::sync::Arc::new(crate::snapshot_browser::SnapshotBrowserState::default())
+            ))
+
+            // Static pipeline analyzer HTML
+            .route("/pipeline-analyzer", get(pipeline_analyzer_handler))
+
             // Merge protected routes
             .merge(protected_routes)
 
@@ -5150,6 +5163,10 @@ async fn vnc_html_handler() -> impl IntoResponse {
 
 async fn vnc_lite_handler() -> impl IntoResponse {
     Html(VNC_LITE_HTML)
+}
+
+async fn pipeline_analyzer_handler() -> impl IntoResponse {
+    Html(include_str!("../static/pipeline-analyzer.html"))
 }
 
 async fn static_handler(

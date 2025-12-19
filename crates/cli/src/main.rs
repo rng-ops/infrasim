@@ -14,7 +14,7 @@ mod generated {
     include!("generated/infrasim.v1.rs");
 }
 
-use commands::{vm, network, volume, console, snapshot, benchmark, attestation, web};
+use commands::{vm, network, volume, console, snapshot, benchmark, attestation, web, artifact};
 
 /// InfraSim CLI - Terraform-Compatible QEMU Platform
 #[derive(Parser)]
@@ -70,6 +70,10 @@ enum Commands {
     #[command(subcommand)]
     Web(web::WebCommands),
 
+    /// Inspect and verify build artifacts
+    #[command(subcommand)]
+    Artifact(artifact::ArtifactCommands),
+
     /// Check daemon status
     Status,
 
@@ -103,6 +107,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Benchmark(args) => benchmark::execute(args, client?, cli.format).await?,
         Commands::Attestation(cmd) => attestation::execute(cmd, client?, cli.format).await?,
         Commands::Web(cmd) => web::execute(cmd).await?,
+        Commands::Artifact(cmd) => artifact::execute(cmd, client.ok(), cli.format).await?,
         Commands::Status => {
             match client {
                 Ok(mut c) => {

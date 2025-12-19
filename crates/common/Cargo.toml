@@ -31,5 +31,10 @@ prost = { workspace = true }
 tonic = { workspace = true }
 ipnetwork = { workspace = true }
 
+# Artifact inspection
+flate2 = "1.0"
+tar = "0.4"
+zip = "2.2"
+
 [build-dependencies]
 tonic-build = { workspace = true }

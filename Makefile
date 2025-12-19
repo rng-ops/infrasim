@@ -1,11 +1,12 @@
 # InfraSim Makefile
-.PHONY: all build clean test install uninstall dev release docker help ui-install ui-dev ui-build ui-typecheck ui-lint dist
+.PHONY: all build clean test install uninstall dev release docker help ui-install ui-dev ui-build ui-typecheck ui-lint dist isvm-install isvm-link isvm-use
 
 # Configuration
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 PREFIX ?= /usr/local
 CARGO_FLAGS ?=
 PROFILE ?= release
+ISVM_DIR ?= $(HOME)/.isvm
 
 help: ## Show this help message
 	@echo "InfraSim Build System"
@@ -146,3 +147,47 @@ ci: clean check lint test build smoke ## Run full CI pipeline
 
 dist: ui-build build ## Build UI + Rust binaries
 	@echo "✅ Dist complete (UI + Rust)"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ISVM - InfraSim Version Manager
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+isvm-setup: ## Install ISVM (InfraSim Version Manager)
+	@chmod +x scripts/install-isvm.sh
+	@./scripts/install-isvm.sh
+
+isvm-install: build ## Build and install current version via ISVM
+	@if [ -f "$(ISVM_DIR)/isvm.sh" ]; then \
+		source "$(ISVM_DIR)/isvm.sh" && isvm install "$(VERSION)"; \
+	else \
+		echo "ISVM not installed. Run 'make isvm-setup' first"; \
+		exit 1; \
+	fi
+
+isvm-link: build ## Link project binaries to PATH (dev mode)
+	@if [ -f "$(ISVM_DIR)/isvm.sh" ]; then \
+		source "$(ISVM_DIR)/isvm.sh" && isvm link; \
+	else \
+		echo "ISVM not installed. Run 'make isvm-setup' first"; \
+		exit 1; \
+	fi
+
+isvm-use: ## Switch to a version (usage: make isvm-use V=v0.1.0)
+	@if [ -z "$(V)" ]; then \
+		echo "Usage: make isvm-use V=<version>"; \
+		echo "Example: make isvm-use V=v0.1.0"; \
+		exit 1; \
+	fi
+	@if [ -f "$(ISVM_DIR)/isvm.sh" ]; then \
+		source "$(ISVM_DIR)/isvm.sh" && isvm use "$(V)"; \
+	else \
+		echo "ISVM not installed. Run 'make isvm-setup' first"; \
+		exit 1; \
+	fi
+
+isvm-list: ## List installed ISVM versions
+	@if [ -f "$(ISVM_DIR)/isvm.sh" ]; then \
+		source "$(ISVM_DIR)/isvm.sh" && isvm list; \
+	else \
+		echo "ISVM not installed. Run 'make isvm-setup' first"; \
+	fi

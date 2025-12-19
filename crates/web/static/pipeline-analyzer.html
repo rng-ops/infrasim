@@ -1,0 +1,1110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>InfraSim Build Pipeline Analyzer</title>
+    
+    <!-- D3.js for force-directed graphs -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    
+    <!-- Cytoscape.js for DAG layout -->
+    <script src="https://unpkg.com/cytoscape@3.26.0/dist/cytoscape.min.js"></script>
+    <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
+    <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+    
+    <style>
+        :root {
+            --bg-primary: #1a1a2e;
+            --bg-secondary: #16213e;
+            --bg-tertiary: #0f3460;
+            --text-primary: #e4e4e7;
+            --text-secondary: #a1a1aa;
+            --accent: #22d3ee;
+            --accent-hover: #06b6d4;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --error: #ef4444;
+            --border: #374151;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+        
+        .header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        
+        .header h1 svg {
+            width: 28px;
+            height: 28px;
+            color: var(--accent);
+        }
+        
+        .header-actions {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+        
+        .btn {
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1px solid var(--border);
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+        
+        .btn:hover {
+            background: var(--accent);
+            color: var(--bg-primary);
+            border-color: var(--accent);
+        }
+        
+        .btn-primary {
+            background: var(--accent);
+            color: var(--bg-primary);
+            border-color: var(--accent);
+        }
+        
+        .btn-primary:hover {
+            background: var(--accent-hover);
+        }
+        
+        .main-container {
+            display: grid;
+            grid-template-columns: 300px 1fr 350px;
+            height: calc(100vh - 65px);
+        }
+        
+        .sidebar {
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border);
+            padding: 1.5rem;
+            overflow-y: auto;
+        }
+        
+        .sidebar-section {
+            margin-bottom: 2rem;
+        }
+        
+        .sidebar-section h3 {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-secondary);
+            margin-bottom: 1rem;
+        }
+        
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        
+        .form-group label {
+            display: block;
+            font-size: 0.875rem;
+            margin-bottom: 0.5rem;
+            color: var(--text-secondary);
+        }
+        
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 0.5rem 0.75rem;
+            border-radius: 0.375rem;
+            border: 1px solid var(--border);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-size: 0.875rem;
+        }
+        
+        .form-group input:focus, .form-group select:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .checkbox-group input[type="checkbox"] {
+            width: 1rem;
+            height: 1rem;
+            accent-color: var(--accent);
+        }
+        
+        .graph-container {
+            position: relative;
+            background: var(--bg-primary);
+            overflow: hidden;
+        }
+        
+        #graph-canvas {
+            width: 100%;
+            height: 100%;
+        }
+        
+        #cytoscape-container {
+            width: 100%;
+            height: 100%;
+            display: none;
+        }
+        
+        .graph-controls {
+            position: absolute;
+            bottom: 1rem;
+            left: 1rem;
+            display: flex;
+            gap: 0.5rem;
+            background: var(--bg-secondary);
+            padding: 0.5rem;
+            border-radius: 0.5rem;
+            border: 1px solid var(--border);
+        }
+        
+        .graph-controls button {
+            width: 2rem;
+            height: 2rem;
+            border-radius: 0.375rem;
+            border: 1px solid var(--border);
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .graph-controls button:hover {
+            background: var(--accent);
+            color: var(--bg-primary);
+        }
+        
+        .view-toggle {
+            position: absolute;
+            top: 1rem;
+            left: 1rem;
+            display: flex;
+            gap: 0;
+            background: var(--bg-secondary);
+            border-radius: 0.5rem;
+            border: 1px solid var(--border);
+            overflow: hidden;
+        }
+        
+        .view-toggle button {
+            padding: 0.5rem 1rem;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 0.875rem;
+        }
+        
+        .view-toggle button.active {
+            background: var(--accent);
+            color: var(--bg-primary);
+        }
+        
+        .details-panel {
+            background: var(--bg-secondary);
+            border-left: 1px solid var(--border);
+            padding: 1.5rem;
+            overflow-y: auto;
+        }
+        
+        .details-section {
+            margin-bottom: 2rem;
+        }
+        
+        .details-section h3 {
+            font-size: 0.875rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 0.75rem;
+        }
+        
+        .stat-card {
+            background: var(--bg-tertiary);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            border: 1px solid var(--border);
+        }
+        
+        .stat-card .value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+        
+        .stat-card .label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-top: 0.25rem;
+        }
+        
+        .risk-meter {
+            width: 100%;
+            height: 8px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 0.5rem 0;
+        }
+        
+        .risk-meter .fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.5s ease;
+        }
+        
+        .risk-low { background: var(--success); }
+        .risk-medium { background: var(--warning); }
+        .risk-high { background: var(--error); }
+        
+        .alert-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        
+        .alert-item {
+            padding: 0.75rem;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            border: 1px solid;
+        }
+        
+        .alert-item.warning {
+            background: rgba(245, 158, 11, 0.1);
+            border-color: var(--warning);
+            color: var(--warning);
+        }
+        
+        .alert-item.error {
+            background: rgba(239, 68, 68, 0.1);
+            border-color: var(--error);
+            color: var(--error);
+        }
+        
+        .alert-item.info {
+            background: rgba(34, 211, 238, 0.1);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+        
+        .node-info {
+            background: var(--bg-tertiary);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            border: 1px solid var(--border);
+        }
+        
+        .node-info h4 {
+            font-size: 1rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .node-info .version {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+        
+        .node-info .source {
+            font-size: 0.75rem;
+            color: var(--accent);
+            margin-top: 0.5rem;
+        }
+        
+        .dependency-list {
+            margin-top: 1rem;
+        }
+        
+        .dependency-list h5 {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+        }
+        
+        .dependency-list ul {
+            list-style: none;
+            font-size: 0.875rem;
+        }
+        
+        .dependency-list li {
+            padding: 0.25rem 0;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .timing-table {
+            width: 100%;
+            font-size: 0.875rem;
+            border-collapse: collapse;
+        }
+        
+        .timing-table th, .timing-table td {
+            padding: 0.5rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .timing-table th {
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        
+        .timing-table .rtt {
+            font-family: monospace;
+        }
+        
+        .timing-table .rtt.fast { color: var(--success); }
+        .timing-table .rtt.medium { color: var(--warning); }
+        .timing-table .rtt.slow { color: var(--error); }
+        
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-secondary);
+        }
+        
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* Tooltip */
+        .tooltip {
+            position: absolute;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            padding: 0.75rem;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            pointer-events: none;
+            z-index: 1000;
+            max-width: 300px;
+        }
+        
+        .legend {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.875rem;
+        }
+        
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <h1>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <path d="M12 6v6l4 2"/>
+            </svg>
+            Build Pipeline Analyzer
+        </h1>
+        <div class="header-actions">
+            <button class="btn" onclick="runTimingProbes()">
+                🌐 ICMP Probe
+            </button>
+            <button class="btn btn-primary" onclick="analyzeWorkspace()">
+                📊 Analyze
+            </button>
+        </div>
+    </header>
+    
+    <main class="main-container">
+        <!-- Left Sidebar: Controls -->
+        <aside class="sidebar">
+            <section class="sidebar-section">
+                <h3>Workspace</h3>
+                <div class="form-group">
+                    <label for="workspace-path">Path</label>
+                    <input type="text" id="workspace-path" placeholder="/path/to/workspace" value=".">
+                </div>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="include-timing" checked>
+                    <label for="include-timing">Include ICMP timing</label>
+                </div>
+            </section>
+            
+            <section class="sidebar-section">
+                <h3>Filters</h3>
+                <div class="form-group">
+                    <label for="filter-type">Dependency Type</label>
+                    <select id="filter-type">
+                        <option value="all">All Dependencies</option>
+                        <option value="normal">Normal Only</option>
+                        <option value="dev">Dev Dependencies</option>
+                        <option value="build">Build Dependencies</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="filter-source">Source</label>
+                    <select id="filter-source">
+                        <option value="all">All Sources</option>
+                        <option value="registry">Registry (crates.io)</option>
+                        <option value="git">Git</option>
+                        <option value="path">Local Path</option>
+                        <option value="vendored">Vendored</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="max-depth">Max Depth</label>
+                    <input type="number" id="max-depth" min="1" max="20" value="10">
+                </div>
+            </section>
+            
+            <section class="sidebar-section">
+                <h3>Legend</h3>
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #4CAF50;"></div>
+                        <span>Registry (crates.io)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #2196F3;"></div>
+                        <span>Git Repository</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #FF9800;"></div>
+                        <span>Local Path</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #9C27B0;"></div>
+                        <span>Vendored</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #9E9E9E;"></div>
+                        <span>Unknown</span>
+                    </div>
+                </div>
+            </section>
+        </aside>
+        
+        <!-- Main Graph Area -->
+        <div class="graph-container">
+            <div class="view-toggle">
+                <button id="view-d3" class="active" onclick="switchView('d3')">Force Graph</button>
+                <button id="view-cytoscape" onclick="switchView('cytoscape')">DAG View</button>
+            </div>
+            
+            <svg id="graph-canvas"></svg>
+            <div id="cytoscape-container"></div>
+            
+            <div class="graph-controls">
+                <button onclick="zoomIn()" title="Zoom In">+</button>
+                <button onclick="zoomOut()" title="Zoom Out">−</button>
+                <button onclick="resetView()" title="Reset View">⌂</button>
+                <button onclick="exportGraph()" title="Export">📥</button>
+            </div>
+            
+            <div id="loading" class="loading" style="display: none;">
+                <div class="spinner"></div>
+            </div>
+        </div>
+        
+        <!-- Right Panel: Details -->
+        <aside class="details-panel">
+            <section class="details-section">
+                <h3>📈 Statistics</h3>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="value" id="stat-nodes">0</div>
+                        <div class="label">Nodes</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="value" id="stat-edges">0</div>
+                        <div class="label">Edges</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="value" id="stat-depth">0</div>
+                        <div class="label">Max Depth</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="value" id="stat-cycles">0</div>
+                        <div class="label">Cycles</div>
+                    </div>
+                </div>
+            </section>
+            
+            <section class="details-section">
+                <h3>⚠️ Risk Assessment</h3>
+                <div class="risk-meter">
+                    <div class="fill risk-low" id="risk-fill" style="width: 0%;"></div>
+                </div>
+                <div id="risk-score" style="font-size: 0.875rem; color: var(--text-secondary);">
+                    Risk Score: 0/100
+                </div>
+            </section>
+            
+            <section class="details-section">
+                <h3>🚨 Alerts</h3>
+                <div class="alert-list" id="alert-list">
+                    <div class="alert-item info">Run analysis to detect issues</div>
+                </div>
+            </section>
+            
+            <section class="details-section" id="selected-node-section" style="display: none;">
+                <h3>📦 Selected Node</h3>
+                <div class="node-info" id="node-info">
+                    <!-- Populated dynamically -->
+                </div>
+            </section>
+            
+            <section class="details-section" id="timing-section" style="display: none;">
+                <h3>🌐 Network Timing</h3>
+                <div id="inferred-region" style="margin-bottom: 1rem; font-size: 0.875rem;">
+                    Inferred Region: <span style="color: var(--accent);">Unknown</span>
+                </div>
+                <table class="timing-table">
+                    <thead>
+                        <tr>
+                            <th>Target</th>
+                            <th>RTT</th>
+                            <th>Hops</th>
+                        </tr>
+                    </thead>
+                    <tbody id="timing-table-body">
+                    </tbody>
+                </table>
+            </section>
+        </aside>
+    </main>
+    
+    <div class="tooltip" id="tooltip" style="display: none;"></div>
+    
+    <script>
+        // State
+        let currentView = 'd3';
+        let graphData = null;
+        let d3Simulation = null;
+        let cyInstance = null;
+        let zoom = null;
+        
+        // API base URL
+        const API_BASE = window.location.origin;
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            initD3Graph();
+            initCytoscape();
+        });
+        
+        // D3 Force-Directed Graph
+        function initD3Graph() {
+            const container = document.getElementById('graph-canvas');
+            const width = container.parentElement.clientWidth;
+            const height = container.parentElement.clientHeight;
+            
+            const svg = d3.select('#graph-canvas')
+                .attr('width', width)
+                .attr('height', height);
+            
+            // Add zoom behavior
+            zoom = d3.zoom()
+                .scaleExtent([0.1, 4])
+                .on('zoom', (event) => {
+                    svg.select('g').attr('transform', event.transform);
+                });
+            
+            svg.call(zoom);
+            
+            // Main group for zoom/pan
+            svg.append('g').attr('class', 'graph-group');
+            
+            // Arrow marker for edges
+            svg.append('defs').append('marker')
+                .attr('id', 'arrowhead')
+                .attr('viewBox', '-0 -5 10 10')
+                .attr('refX', 20)
+                .attr('refY', 0)
+                .attr('orient', 'auto')
+                .attr('markerWidth', 6)
+                .attr('markerHeight', 6)
+                .append('path')
+                .attr('d', 'M 0,-5 L 10,0 L 0,5')
+                .attr('fill', '#666');
+        }
+        
+        function renderD3Graph(data) {
+            const svg = d3.select('#graph-canvas');
+            const g = svg.select('.graph-group');
+            const width = svg.node().parentElement.clientWidth;
+            const height = svg.node().parentElement.clientHeight;
+            
+            // Clear previous
+            g.selectAll('*').remove();
+            
+            // Create simulation
+            d3Simulation = d3.forceSimulation(data.nodes)
+                .force('link', d3.forceLink(data.links)
+                    .id(d => d.id)
+                    .distance(100)
+                    .strength(d => d.strength * 0.5))
+                .force('charge', d3.forceManyBody().strength(-300))
+                .force('center', d3.forceCenter(width / 2, height / 2))
+                .force('collision', d3.forceCollide().radius(d => d.radius + 10));
+            
+            // Draw links
+            const link = g.append('g')
+                .attr('class', 'links')
+                .selectAll('line')
+                .data(data.links)
+                .enter()
+                .append('line')
+                .attr('stroke', d => {
+                    switch (d.kind) {
+                        case 'dev': return '#666';
+                        case 'build': return '#999';
+                        default: return '#444';
+                    }
+                })
+                .attr('stroke-width', d => d.optional ? 1 : 2)
+                .attr('stroke-dasharray', d => d.optional ? '4,4' : 'none')
+                .attr('marker-end', 'url(#arrowhead)');
+            
+            // Draw nodes
+            const node = g.append('g')
+                .attr('class', 'nodes')
+                .selectAll('g')
+                .data(data.nodes)
+                .enter()
+                .append('g')
+                .attr('class', 'node')
+                .call(d3.drag()
+                    .on('start', dragstarted)
+                    .on('drag', dragged)
+                    .on('end', dragended));
+            
+            node.append('circle')
+                .attr('r', d => d.radius)
+                .attr('fill', d => d.color)
+                .attr('stroke', '#fff')
+                .attr('stroke-width', 2);
+            
+            node.append('text')
+                .text(d => d.name)
+                .attr('x', d => d.radius + 5)
+                .attr('y', 4)
+                .attr('fill', '#e4e4e7')
+                .attr('font-size', '12px');
+            
+            // Tooltip
+            node.on('mouseover', (event, d) => {
+                const tooltip = document.getElementById('tooltip');
+                tooltip.innerHTML = `
+                    <strong>${d.name}</strong><br>
+                    Version: ${d.version || 'N/A'}<br>
+                    Source: ${d.source_type}
+                `;
+                tooltip.style.display = 'block';
+                tooltip.style.left = (event.pageX + 10) + 'px';
+                tooltip.style.top = (event.pageY + 10) + 'px';
+            })
+            .on('mouseout', () => {
+                document.getElementById('tooltip').style.display = 'none';
+            })
+            .on('click', (event, d) => {
+                selectNode(d);
+            });
+            
+            // Simulation tick
+            d3Simulation.on('tick', () => {
+                link
+                    .attr('x1', d => d.source.x)
+                    .attr('y1', d => d.source.y)
+                    .attr('x2', d => d.target.x)
+                    .attr('y2', d => d.target.y);
+                
+                node.attr('transform', d => `translate(${d.x},${d.y})`);
+            });
+            
+            function dragstarted(event, d) {
+                if (!event.active) d3Simulation.alphaTarget(0.3).restart();
+                d.fx = d.x;
+                d.fy = d.y;
+            }
+            
+            function dragged(event, d) {
+                d.fx = event.x;
+                d.fy = event.y;
+            }
+            
+            function dragended(event, d) {
+                if (!event.active) d3Simulation.alphaTarget(0);
+                d.fx = null;
+                d.fy = null;
+            }
+        }
+        
+        // Cytoscape DAG View
+        function initCytoscape() {
+            cyInstance = cytoscape({
+                container: document.getElementById('cytoscape-container'),
+                style: [
+                    {
+                        selector: 'node',
+                        style: {
+                            'label': 'data(label)',
+                            'background-color': '#4CAF50',
+                            'color': '#e4e4e7',
+                            'text-valign': 'bottom',
+                            'text-halign': 'center',
+                            'font-size': '10px',
+                            'text-margin-y': 5
+                        }
+                    },
+                    {
+                        selector: 'node[node_type="git"]',
+                        style: { 'background-color': '#2196F3' }
+                    },
+                    {
+                        selector: 'node[node_type="local"]',
+                        style: { 'background-color': '#FF9800' }
+                    },
+                    {
+                        selector: 'node[node_type="vendored"]',
+                        style: { 'background-color': '#9C27B0' }
+                    },
+                    {
+                        selector: 'node[isRoot]',
+                        style: {
+                            'width': 30,
+                            'height': 30,
+                            'border-width': 3,
+                            'border-color': '#22d3ee'
+                        }
+                    },
+                    {
+                        selector: 'edge',
+                        style: {
+                            'width': 2,
+                            'line-color': '#666',
+                            'target-arrow-color': '#666',
+                            'target-arrow-shape': 'triangle',
+                            'curve-style': 'bezier'
+                        }
+                    },
+                    {
+                        selector: 'edge[edge_type="dev-depends"]',
+                        style: { 'line-style': 'dashed' }
+                    }
+                ]
+            });
+        }
+        
+        function renderCytoscapeGraph(data) {
+            cyInstance.elements().remove();
+            cyInstance.add(data.elements);
+            
+            cyInstance.layout({
+                name: 'dagre',
+                rankDir: 'TB',
+                nodeSep: 50,
+                rankSep: 100,
+                animate: true
+            }).run();
+            
+            cyInstance.on('tap', 'node', (evt) => {
+                const node = evt.target;
+                selectNode({
+                    id: node.id(),
+                    name: node.data('label'),
+                    version: node.data('version'),
+                    source_type: node.data('node_type')
+                });
+            });
+        }
+        
+        // View switching
+        function switchView(view) {
+            currentView = view;
+            
+            document.getElementById('view-d3').classList.toggle('active', view === 'd3');
+            document.getElementById('view-cytoscape').classList.toggle('active', view === 'cytoscape');
+            
+            document.getElementById('graph-canvas').style.display = view === 'd3' ? 'block' : 'none';
+            document.getElementById('cytoscape-container').style.display = view === 'cytoscape' ? 'block' : 'none';
+            
+            if (graphData) {
+                if (view === 'cytoscape') {
+                    renderCytoscapeGraph(graphData.cytoscape);
+                }
+            }
+        }
+        
+        // Zoom controls
+        function zoomIn() {
+            if (currentView === 'd3') {
+                d3.select('#graph-canvas').transition().call(zoom.scaleBy, 1.3);
+            } else {
+                cyInstance.zoom(cyInstance.zoom() * 1.3);
+            }
+        }
+        
+        function zoomOut() {
+            if (currentView === 'd3') {
+                d3.select('#graph-canvas').transition().call(zoom.scaleBy, 0.7);
+            } else {
+                cyInstance.zoom(cyInstance.zoom() * 0.7);
+            }
+        }
+        
+        function resetView() {
+            if (currentView === 'd3') {
+                d3.select('#graph-canvas').transition().call(zoom.transform, d3.zoomIdentity);
+            } else {
+                cyInstance.fit();
+            }
+        }
+        
+        function exportGraph() {
+            if (!graphData) return;
+            
+            const blob = new Blob([JSON.stringify(graphData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'dependency-graph.json';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+        
+        // Node selection
+        function selectNode(node) {
+            const section = document.getElementById('selected-node-section');
+            const info = document.getElementById('node-info');
+            
+            section.style.display = 'block';
+            info.innerHTML = `
+                <h4>${node.name}</h4>
+                <div class="version">v${node.version || 'N/A'}</div>
+                <div class="source">${node.source_type}</div>
+                <div class="dependency-list">
+                    <h5>Dependencies</h5>
+                    <ul id="node-deps"></ul>
+                </div>
+            `;
+            
+            // Find dependencies
+            if (graphData && graphData.d3) {
+                const deps = graphData.d3.links
+                    .filter(l => l.source.id === node.id || l.source === node.id)
+                    .map(l => l.target.name || l.target);
+                
+                const depList = document.getElementById('node-deps');
+                depList.innerHTML = deps.map(d => `<li>${d}</li>`).join('');
+            }
+        }
+        
+        // API calls
+        async function analyzeWorkspace() {
+            const path = document.getElementById('workspace-path').value;
+            const includeTiming = document.getElementById('include-timing').checked;
+            
+            showLoading(true);
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/analysis/workspace`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        workspace_path: path,
+                        include_timing: includeTiming
+                    })
+                });
+                
+                if (!response.ok) throw new Error('Analysis failed');
+                
+                const result = await response.json();
+                
+                if (result.success && result.report) {
+                    // Fetch both graph formats
+                    const [d3Resp, cyResp] = await Promise.all([
+                        fetch(`${API_BASE}/api/analysis/graph/d3`),
+                        fetch(`${API_BASE}/api/analysis/graph/cytoscape`)
+                    ]);
+                    
+                    graphData = {
+                        d3: await d3Resp.json(),
+                        cytoscape: await cyResp.json(),
+                        report: result.report
+                    };
+                    
+                    renderD3Graph(graphData.d3);
+                    updateStats(result.report);
+                    updateAlerts(result.report);
+                    
+                    if (result.timing) {
+                        updateTiming(result.timing);
+                    }
+                }
+            } catch (err) {
+                console.error(err);
+                alert('Analysis failed: ' + err.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        async function runTimingProbes() {
+            showLoading(true);
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/analysis/timing`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ include_defaults: true })
+                });
+                
+                if (!response.ok) throw new Error('Timing probes failed');
+                
+                const result = await response.json();
+                updateTiming(result.fingerprint);
+            } catch (err) {
+                console.error(err);
+                alert('Timing probes failed: ' + err.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        // UI updates
+        function showLoading(show) {
+            document.getElementById('loading').style.display = show ? 'flex' : 'none';
+        }
+        
+        function updateStats(report) {
+            document.getElementById('stat-nodes').textContent = report.graph.metadata.total_nodes;
+            document.getElementById('stat-edges').textContent = report.graph.metadata.total_edges;
+            document.getElementById('stat-depth').textContent = report.graph.metadata.max_depth;
+            document.getElementById('stat-cycles').textContent = report.cycles.length;
+            
+            // Risk score
+            const riskScore = report.risk_score;
+            const riskFill = document.getElementById('risk-fill');
+            riskFill.style.width = riskScore + '%';
+            riskFill.className = 'fill ' + (riskScore < 30 ? 'risk-low' : riskScore < 60 ? 'risk-medium' : 'risk-high');
+            document.getElementById('risk-score').textContent = `Risk Score: ${riskScore.toFixed(1)}/100`;
+        }
+        
+        function updateAlerts(report) {
+            const list = document.getElementById('alert-list');
+            const alerts = [];
+            
+            report.cycles.forEach(cycle => {
+                alerts.push({
+                    type: 'error',
+                    message: `Cycle: ${cycle.description}`
+                });
+            });
+            
+            report.suspicious_patterns.forEach(pattern => {
+                alerts.push({
+                    type: 'warning',
+                    message: pattern.description
+                });
+            });
+            
+            report.recommendations.forEach(rec => {
+                alerts.push({
+                    type: 'info',
+                    message: rec
+                });
+            });
+            
+            if (alerts.length === 0) {
+                list.innerHTML = '<div class="alert-item info">No issues detected</div>';
+            } else {
+                list.innerHTML = alerts.map(a => 
+                    `<div class="alert-item ${a.type}">${a.message}</div>`
+                ).join('');
+            }
+        }
+        
+        function updateTiming(timing) {
+            const section = document.getElementById('timing-section');
+            section.style.display = 'block';
+            
+            document.querySelector('#inferred-region span').textContent = 
+                timing.inferred_region || 'Unknown';
+            
+            const tbody = document.getElementById('timing-table-body');
+            tbody.innerHTML = timing.probes
+                .filter(p => p.success)
+                .slice(0, 10)
+                .map(probe => {
+                    const rtt = probe.rtt_ms;
+                    const rttClass = rtt < 50 ? 'fast' : rtt < 150 ? 'medium' : 'slow';
+                    return `
+                        <tr>
+                            <td>${probe.label}</td>
+                            <td class="rtt ${rttClass}">${rtt ? rtt.toFixed(1) + 'ms' : 'N/A'}</td>
+                            <td>${probe.hops_estimate || '-'}</td>
+                        </tr>
+                    `;
+                })
+                .join('');
+        }
+    </script>
+</body>
+</html>

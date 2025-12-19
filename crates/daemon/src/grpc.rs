@@ -48,6 +48,7 @@ use crate::generated::{
     DeleteLoRaDeviceRequest, DeleteLoRaDeviceResponse,
     GetHealthRequest, GetHealthResponse,
     GetDaemonStatusRequest, GetDaemonStatusResponse,
+    InspectArtifactRequest, InspectArtifactResponse,
     Console, ConsoleSpec, ConsoleStatus,
     HostProvenance, AttestationReport,
 };
@@ -884,6 +885,31 @@ impl InfraSimDaemon for DaemonService {
             hvf_available: infrasim_common::attestation::is_hvf_available(),
         }))
     }
+
+    // ========================================================================
+    // Artifact Inspection
+    // ========================================================================
+
+    async fn inspect_artifact(
+        &self,
+        request: Request<InspectArtifactRequest>,
+    ) -> Result<Response<InspectArtifactResponse>, Status> {
+        let req = request.into_inner();
+        let path = std::path::PathBuf::from(&req.path);
+
+        if !path.exists() {
+            return Err(Status::not_found(format!("Artifact not found: {}", req.path)));
+        }
+
+        let mut inspector = infrasim_common::artifact::ArtifactInspector::new();
+        let report = inspector
+            .inspect(&path)
+            .map_err(|e| Status::internal(format!("Failed to inspect artifact: {}", e)))?;
+
+        Ok(Response::new(InspectArtifactResponse {
+            report: Some(artifact_report_to_proto(&report)),
+        }))
+    }
 }
 
 // ============================================================================
@@ -1063,6 +1089,64 @@ fn attestation_to_proto(report: &types::AttestationReport) -> AttestationReport 
         signature: report.signature.clone(),
         created_at: report.created_at,
         attestation_type: report.attestation_type.clone(),
+    }
+}
+
+fn artifact_report_to_proto(report: &infrasim_common::artifact::ArtifactInspectionReport) -> generated::ArtifactInspectionReport {
+    generated::ArtifactInspectionReport {
+        input_path: report.input_path.clone(),
+        sha256_file_ok: report.sha256_file_ok,
+        sha256_expected: report.sha256_expected.clone().unwrap_or_default(),
+        sha256_actual: report.sha256_actual.clone().unwrap_or_default(),
+        extracted_files: report.extracted_files.iter().map(|f| {
+            generated::FileEntry {
+                path: f.path.clone(),
+                size: f.size as i64,
+                sha256: f.sha256.clone(),
+            }
+        }).collect(),
+        manifest: Some(generated::ManifestCheck {
+            found: report.manifest.found,
+            parsed_ok: report.manifest.parsed_ok,
+            manifest_sha256: report.manifest.manifest_sha256.clone().unwrap_or_default(),
+            total_entries: report.manifest.total_entries as i32,
+            verified_entries: report.manifest.verified_entries as i32,
+            missing_files: report.manifest.missing_files.clone(),
+            mismatched_files: report.manifest.mismatched_files.clone(),
+            parse_errors: report.manifest.parse_errors.clone(),
+        }),
+        attestations: Some(generated::AttestationCheck {
+            integrity_attestation_found: report.attestations.integrity_attestation_found,
+            integrity_attestation_ok: report.attestations.integrity_attestation_ok,
+            manifest_sha256_in_attestation: report.attestations.manifest_sha256_in_attestation.clone().unwrap_or_default(),
+            manifest_sha256_matches: report.attestations.manifest_sha256_matches,
+            malformed_json_files: report.attestations.malformed_json_files.clone(),
+            truncation_detected: report.attestations.truncation_detected.clone(),
+        }),
+        qcow2_images: report.qcow2_images.iter().map(|q| {
+            generated::Qcow2Info {
+                path: q.path.clone(),
+                valid_magic: q.valid_magic,
+                version: q.version as i32,
+                virtual_size: q.virtual_size as i64,
+                cluster_bits: q.cluster_bits as i32,
+                cluster_size: q.cluster_size as i64,
+                backing_file: q.backing_file.clone().unwrap_or_default(),
+                backing_file_exists: q.backing_file_exists,
+                issues: q.issues.clone(),
+            }
+        }).collect(),
+        signatures: Some(generated::SignatureStatus {
+            signature_file_found: report.signatures.signature_file_found,
+            signature_info_found: report.signatures.signature_info_found,
+            status: report.signatures.status.clone(),
+            algorithm: report.signatures.algorithm.clone().unwrap_or_default(),
+            signer: report.signatures.signer.clone().unwrap_or_default(),
+            remediation_hints: report.signatures.remediation_hints.clone(),
+        }),
+        warnings: report.warnings.clone(),
+        errors: report.errors.clone(),
+        passed: report.passed,
     }
 }
 

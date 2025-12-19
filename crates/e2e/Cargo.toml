@@ -49,6 +49,11 @@ thiserror = "1"
 sha2 = "0.10"
 hex = "0.4"
 
+# For artifact inspection tests
+flate2 = "1.0"
+tar = "0.4"
+chrono = "0.4"
+
 [dev-dependencies]
 # For running as tests
 test-case = "3"

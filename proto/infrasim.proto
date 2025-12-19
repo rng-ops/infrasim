@@ -64,6 +64,9 @@ service InfraSimDaemon {
   // Health and status
   rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
   rpc GetDaemonStatus(GetDaemonStatusRequest) returns (GetDaemonStatusResponse);
+  
+  // Artifact inspection
+  rpc InspectArtifact(InspectArtifactRequest) returns (InspectArtifactResponse);
 }
 
 // ============================================================================
@@ -662,4 +665,94 @@ message GetDaemonStatusResponse {
   bool qemu_available = 6;
   string qemu_version = 7;
   bool hvf_available = 8;
+}
+
+// ============================================================================
+// Artifact Inspection Messages
+// ============================================================================
+
+message InspectArtifactRequest {
+  string path = 1;  // Path to .zip or .tar.gz bundle
+}
+
+message InspectArtifactResponse {
+  ArtifactInspectionReport report = 1;
+}
+
+message ArtifactInspectionReport {
+  string input_path = 1;
+  
+  // SHA256 verification of outer tarball
+  bool sha256_file_ok = 2;
+  string sha256_expected = 3;
+  string sha256_actual = 4;
+  
+  // Extracted file inventory
+  repeated FileEntry extracted_files = 5;
+  
+  // Manifest verification
+  ManifestCheck manifest = 6;
+  
+  // Attestation verification  
+  AttestationCheck attestations = 7;
+  
+  // qcow2 image analysis
+  repeated Qcow2Info qcow2_images = 8;
+  
+  // Signature status
+  SignatureStatus signatures = 9;
+  
+  // Issues found
+  repeated string warnings = 10;
+  repeated string errors = 11;
+  
+  // Overall status
+  bool passed = 12;
+}
+
+message FileEntry {
+  string path = 1;
+  int64 size = 2;
+  string sha256 = 3;
+}
+
+message ManifestCheck {
+  bool found = 1;
+  bool parsed_ok = 2;
+  string manifest_sha256 = 3;
+  int32 total_entries = 4;
+  int32 verified_entries = 5;
+  repeated string missing_files = 6;
+  repeated string mismatched_files = 7;
+  repeated string parse_errors = 8;
+}
+
+message AttestationCheck {
+  bool integrity_attestation_found = 1;
+  bool integrity_attestation_ok = 2;
+  string manifest_sha256_in_attestation = 3;
+  bool manifest_sha256_matches = 4;
+  repeated string malformed_json_files = 5;
+  repeated string truncation_detected = 6;
+}
+
+message Qcow2Info {
+  string path = 1;
+  bool valid_magic = 2;
+  int32 version = 3;
+  int64 virtual_size = 4;
+  int32 cluster_bits = 5;
+  int64 cluster_size = 6;
+  string backing_file = 7;
+  bool backing_file_exists = 8;
+  repeated string issues = 9;
+}
+
+message SignatureStatus {
+  bool signature_file_found = 1;
+  bool signature_info_found = 2;
+  string status = 3;  // "verified", "placeholder", "missing", "invalid"
+  string algorithm = 4;
+  string signer = 5;
+  repeated string remediation_hints = 6;
 }

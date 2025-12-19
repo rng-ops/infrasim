@@ -49,6 +49,28 @@ jobs:
         path: target
         key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
     
+    - name: ICMP Timing Probes (Pre-Build)
+      id: timing_pre
+      run: |
+        echo "=== Network Timing Fingerprint (Pre-Build) ===" | tee timing-pre.txt
+        echo "timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a timing-pre.txt
+        echo "github_run_id: ${{ github.run_id }}" | tee -a timing-pre.txt
+        echo "" | tee -a timing-pre.txt
+        
+        # Probe time servers for BGP path inference
+        for host in time.google.com time.cloudflare.com time.apple.com time.nist.gov pool.ntp.org; do
+          echo "Probing $host..." | tee -a timing-pre.txt
+          ping -c 3 -W 2 $host 2>&1 | tail -1 | tee -a timing-pre.txt || echo "  Failed" | tee -a timing-pre.txt
+        done
+        
+        # Geographic reference probes
+        echo "" | tee -a timing-pre.txt
+        echo "=== Geographic References ===" | tee -a timing-pre.txt
+        for host in ping.online.net speedtest.tele2.net; do
+          echo "Probing $host..." | tee -a timing-pre.txt
+          ping -c 3 -W 2 $host 2>&1 | tail -1 | tee -a timing-pre.txt || echo "  Failed" | tee -a timing-pre.txt
+        done
+    
     - name: Run build pipeline
       run: |
         chmod +x build.sh
@@ -59,6 +81,52 @@ jobs:
     - name: Run tests
       run: cargo test --all --verbose
     
+    - name: ICMP Timing Probes (Post-Build)
+      id: timing_post
+      run: |
+        echo "=== Network Timing Fingerprint (Post-Build) ===" | tee timing-post.txt
+        echo "timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a timing-post.txt
+        echo "" | tee -a timing-post.txt
+        
+        for host in time.google.com time.cloudflare.com time.apple.com; do
+          echo "Probing $host..." | tee -a timing-post.txt
+          ping -c 3 -W 2 $host 2>&1 | tail -1 | tee -a timing-post.txt || echo "  Failed" | tee -a timing-post.txt
+        done
+    
+    - name: Setup ISVM
+      run: |
+        # Install ISVM for version management
+        chmod +x scripts/install-isvm.sh
+        ./scripts/install-isvm.sh
+        
+        # Source ISVM functions
+        export ISVM_DIR="$HOME/.isvm"
+        source "$ISVM_DIR/isvm.sh"
+        
+        # Install this build version
+        make isvm-install
+        
+        # List installed versions
+        isvm list
+    
+    - name: Create version metadata
+      run: |
+        mkdir -p dist
+        VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "${{ github.ref_name }}")
+        cat > dist/version-metadata.json << EOF
+        {
+          "version": "$VERSION",
+          "git_commit": "${{ github.sha }}",
+          "git_branch": "${{ github.ref_name }}",
+          "build_timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "github_run_id": "${{ github.run_id }}",
+          "github_run_number": "${{ github.run_number }}",
+          "runner_os": "${{ runner.os }}",
+          "runner_arch": "${{ runner.arch }}",
+          "isvm_compatible": true
+        }
+        EOF
+    
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
@@ -67,7 +135,18 @@ jobs:
           dist/*.tar.gz
           dist/*.sha256
           dist/manifest.json
+          dist/version-metadata.json
+          timing-pre.txt
+          timing-post.txt
         retention-days: 30
+    
+    - name: Upload ISVM metadata
+      uses: actions/upload-artifact@v4
+      with:
+        name: isvm-metadata-${{ github.ref_name }}
+        path: |
+          dist/version-metadata.json
+        retention-days: 90
     
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/v')
@@ -77,22 +156,38 @@ jobs:
           dist/*.tar.gz
           dist/*.sha256
           dist/manifest.json
+          dist/version-metadata.json
+          timing-pre.txt
+          timing-post.txt
         body: |
           ## InfraSim Release ${{ github.ref_name }}
           
           ### Binaries
           - `infrasim` - CLI tool
           - `infrasimd` - Daemon
+          - `infrasim-web` - Web console
           - `terraform-provider-infrasim` - Terraform provider
           
-          ### Installation
+          ### Installation with ISVM (Recommended)
+          ```bash
+          # Install ISVM version manager
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install-isvm.sh | bash
+          
+          # Install this version
+          isvm install ${{ github.ref_name }}
+          isvm use ${{ github.ref_name }}
+          
+          # Verify
+          infrasim --version
+          ```
+          
+          ### Manual Installation
           ```bash
           # Download and extract
           tar -xzf infrasim-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz
           
           # Move to PATH
-          sudo mv infrasim /usr/local/bin/
-          sudo mv infrasimd /usr/local/bin/
+          sudo mv infrasim infrasimd infrasim-web /usr/local/bin/
           
           # Terraform provider
           mkdir -p ~/.terraform.d/plugins/registry.terraform.io/infrasim/infrasim/${{ github.ref_name }}/darwin_arm64
@@ -102,6 +197,11 @@ jobs:
           ### Requirements
           - macOS 12+ (Apple Silicon)
           - QEMU 8.0+ (`brew install qemu`)
+          
+          ### Build Provenance
+          - Commit: ${{ github.sha }}
+          - Run ID: ${{ github.run_id }}
+          - Timing probes included for network path analysis
         draft: false
         prerelease: false
       env:
