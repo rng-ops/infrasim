@@ -611,16 +611,17 @@
             </section>
             
             <section class="details-section" id="timing-section" style="display: none;">
-                <h3>🌐 Network Timing</h3>
-                <div id="inferred-region" style="margin-bottom: 1rem; font-size: 0.875rem;">
-                    Inferred Region: <span style="color: var(--accent);">Unknown</span>
+                <h3>🌐 Network Timing (Opt-in)</h3>
+                <div id="timing-stats" style="margin-bottom: 1rem; font-size: 0.875rem;">
+                    <div>Successful: <span id="timing-successful" style="color: var(--accent);">-</span></div>
+                    <div>Avg RTT: <span id="timing-avg-rtt" style="color: var(--accent);">-</span></div>
                 </div>
                 <table class="timing-table">
                     <thead>
                         <tr>
                             <th>Target</th>
                             <th>RTT</th>
-                            <th>Hops</th>
+                            <th>Status</th>
                         </tr>
                     </thead>
                     <tbody id="timing-table-body">
@@ -1085,21 +1086,25 @@
             const section = document.getElementById('timing-section');
             section.style.display = 'block';
             
-            document.querySelector('#inferred-region span').textContent = 
-                timing.inferred_region || 'Unknown';
+            // Update aggregated stats
+            const stats = timing.aggregated_stats || {};
+            document.getElementById('timing-successful').textContent = 
+                `${stats.successful_probes || 0}/${stats.total_probes || 0}`;
+            document.getElementById('timing-avg-rtt').textContent = 
+                stats.avg_rtt_ms ? `${stats.avg_rtt_ms.toFixed(1)}ms` : 'N/A';
             
             const tbody = document.getElementById('timing-table-body');
             tbody.innerHTML = timing.probes
-                .filter(p => p.success)
                 .slice(0, 10)
                 .map(probe => {
                     const rtt = probe.rtt_ms;
-                    const rttClass = rtt < 50 ? 'fast' : rtt < 150 ? 'medium' : 'slow';
+                    const rttClass = rtt && rtt < 50 ? 'fast' : rtt && rtt < 150 ? 'medium' : 'slow';
+                    const status = probe.success ? '✓' : '✗';
                     return `
                         <tr>
                             <td>${probe.label}</td>
                             <td class="rtt ${rttClass}">${rtt ? rtt.toFixed(1) + 'ms' : 'N/A'}</td>
-                            <td>${probe.hops_estimate || '-'}</td>
+                            <td>${status}</td>
                         </tr>
                     `;
                 })

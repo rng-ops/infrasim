@@ -9,3 +9,6 @@ pub mod benchmark;
 pub mod attestation;
 pub mod web;
 pub mod artifact;
+pub mod control;
+pub mod pipeline;
+pub mod sdn;

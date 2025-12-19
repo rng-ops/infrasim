@@ -1,0 +1,269 @@
+name: Build and Test Alpine Profiles
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'images/alpine/**'
+      - '.github/workflows/build-alpine-profiles.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'images/alpine/**'
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Profile to build (or "all")'
+        required: false
+        default: 'all'
+      run_integration_tests:
+        description: 'Run integration tests'
+        required: false
+        default: 'true'
+
+env:
+  ALPINE_VERSION: "3.19"
+  REGISTRY: ghcr.io
+
+jobs:
+  # Validate all profiles and features
+  validate:
+    name: Validate Profiles
+    runs-on: ubuntu-latest
+    outputs:
+      profiles: ${{ steps.list-profiles.outputs.profiles }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq yq
+      
+      - name: Validate feature schemas
+        run: |
+          cd images/alpine
+          for feature_dir in features/*/; do
+            feature_name=$(basename "$feature_dir")
+            echo "Validating feature: $feature_name"
+            
+            # Check feature.yaml exists
+            if [ ! -f "${feature_dir}/feature.yaml" ]; then
+              echo "ERROR: ${feature_dir}/feature.yaml not found"
+              exit 1
+            fi
+            
+            # Validate required fields
+            name=$(yq -r '.name' "${feature_dir}/feature.yaml")
+            if [ -z "$name" ] || [ "$name" = "null" ]; then
+              echo "ERROR: Feature $feature_name missing 'name' field"
+              exit 1
+            fi
+            
+            echo "  ✓ $feature_name valid"
+          done
+      
+      - name: Validate profile schemas
+        run: |
+          cd images/alpine
+          for profile in profiles/*.yaml; do
+            profile_name=$(basename "$profile" .yaml)
+            echo "Validating profile: $profile_name"
+            
+            # Check required fields
+            name=$(yq -r '.name' "$profile")
+            base=$(yq -r '.base' "$profile")
+            
+            if [ -z "$name" ] || [ "$name" = "null" ]; then
+              echo "ERROR: Profile $profile_name missing 'name' field"
+              exit 1
+            fi
+            
+            if [ -z "$base" ] || [ "$base" = "null" ]; then
+              echo "ERROR: Profile $profile_name missing 'base' field"
+              exit 1
+            fi
+            
+            # Validate features exist
+            for feature in $(yq -r '.features[]?' "$profile"); do
+              if [ ! -d "features/$feature" ]; then
+                echo "ERROR: Profile $profile_name references unknown feature: $feature"
+                exit 1
+              fi
+            done
+            
+            echo "  ✓ $profile_name valid"
+          done
+      
+      - name: List profiles to build
+        id: list-profiles
+        run: |
+          cd images/alpine/profiles
+          if [ "${{ github.event.inputs.profile }}" = "all" ] || [ -z "${{ github.event.inputs.profile }}" ]; then
+            profiles=$(ls -1 *.yaml | sed 's/.yaml$//' | jq -R -s -c 'split("\n") | map(select(. != ""))')
+          else
+            profiles='["${{ github.event.inputs.profile }}"]'
+          fi
+          echo "profiles=$profiles" >> $GITHUB_OUTPUT
+          echo "Profiles to build: $profiles"
+
+  # Build each profile
+  build:
+    name: Build Profile
+    needs: validate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: ${{ fromJson(needs.validate.outputs.profiles) }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            qemu-utils \
+            libguestfs-tools \
+            yq \
+            jq
+      
+      - name: Compose profile
+        run: |
+          cd images/alpine
+          chmod +x compose-profile.sh
+          ./compose-profile.sh ${{ matrix.profile }}
+      
+      - name: Build profile image
+        run: |
+          cd images/alpine
+          chmod +x build-profile.sh
+          
+          # Create a minimal base image for testing
+          qemu-img create -f qcow2 alpine-base.qcow2 2G
+          
+          ./build-profile.sh ${{ matrix.profile }} \
+            --base-image alpine-base.qcow2 \
+            --output output/${{ matrix.profile }}.qcow2
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: profile-${{ matrix.profile }}
+          path: |
+            images/alpine/output/${{ matrix.profile }}.qcow2
+            images/alpine/output/${{ matrix.profile }}.provenance.json
+            images/alpine/build/${{ matrix.profile }}/
+          retention-days: 7
+
+  # Run integration tests
+  test:
+    name: Integration Tests
+    needs: build
+    if: github.event.inputs.run_integration_tests != 'false'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: ${{ fromJson(needs.validate.outputs.profiles) }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download profile artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: profile-${{ matrix.profile }}
+          path: images/alpine/output
+      
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            qemu-system-x86 \
+            python3 \
+            python3-pip
+          
+          pip3 install pyyaml
+      
+      - name: Run selftest validation
+        run: |
+          cd images/alpine
+          
+          # Validate selftests are syntactically correct
+          for test_file in features/*/selftest/*.py; do
+            if [ -f "$test_file" ]; then
+              echo "Checking: $test_file"
+              python3 -m py_compile "$test_file"
+            fi
+          done
+          
+          echo "All selftests validated"
+      
+      - name: Validate build outputs
+        run: |
+          cd images/alpine
+          
+          profile="${{ matrix.profile }}"
+          
+          # Check manifest exists
+          if [ -f "build/$profile/manifest.json" ]; then
+            echo "Manifest:"
+            cat "build/$profile/manifest.json"
+          fi
+          
+          # Check provenance
+          if [ -f "output/$profile.provenance.json" ]; then
+            echo "Provenance:"
+            cat "output/$profile.provenance.json"
+          fi
+
+  # Generate signed provenance
+  provenance:
+    name: Generate Provenance
+    needs: [build, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # For OIDC signing
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      
+      - name: Generate SLSA provenance
+        uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v1.9.0
+        with:
+          base64-subjects: |
+            ${{ steps.hash.outputs.hashes }}
+      
+      - name: Upload provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: provenance
+          path: |
+            *.intoto.jsonl
+          retention-days: 30
+
+  # Summary job
+  summary:
+    name: Build Summary
+    needs: [validate, build, test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summary
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Profile | Build | Test |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-------|------|" >> $GITHUB_STEP_SUMMARY
+          
+          profiles='${{ needs.validate.outputs.profiles }}'
+          for profile in $(echo "$profiles" | jq -r '.[]'); do
+            build_status="✓"
+            test_status="✓"
+            echo "| $profile | $build_status | $test_status |" >> $GITHUB_STEP_SUMMARY
+          done

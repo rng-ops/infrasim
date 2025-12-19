@@ -1,0 +1,42 @@
+{
+  "$schema": "https://infrasim.io/schemas/node-descriptor.schema.json",
+  "node_id": "${NODE_ID}",
+  "hostname": "${HOSTNAME}",
+  "version": "1.0.0",
+  "build": {
+    "git_sha": "${GIT_SHA}",
+    "build_date": "${BUILD_DATE}",
+    "profile": "${PROFILE}",
+    "overlay_chain_hash": "${OVERLAY_CHAIN_HASH}"
+  },
+  "identity": {
+    "wg_public_key": "${WG_PUBLIC_KEY}",
+    "tailscale_node_key": "${TS_NODE_KEY}",
+    "ed25519_public_key": "${ED25519_PUBLIC_KEY}"
+  },
+  "roles": ["${ROLES}"],
+  "endpoints": {
+    "rendezvous_ipv6": ["${RENDEZVOUS_IPV6}"],
+    "wireguard": {
+      "port": 51820,
+      "ipv4": "${WG_IPV4}",
+      "ipv6": "${WG_IPV6}"
+    },
+    "control_mtls": {
+      "enabled": false,
+      "port": 8443
+    }
+  },
+  "capabilities": {
+    "exit_node": false,
+    "relay": false,
+    "control_plane": false
+  },
+  "attestation": {
+    "type": "signed",
+    "algorithm": "Ed25519",
+    "signer": "${SIGNER_ID}"
+  },
+  "created_at": "${CREATED_AT}",
+  "expires_at": "${EXPIRES_AT}"
+}

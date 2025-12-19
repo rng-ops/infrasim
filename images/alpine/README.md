@@ -1,28 +1,56 @@
 # InfraSim Alpine Linux Image
 
-Reproducible QEMU-bootable Alpine Linux qcow2 image for InfraSim.
+Reproducible QEMU-bootable Alpine Linux qcow2 image for InfraSim with a
+modular feature overlay system for building specialized profiles.
 
 ## Quick Start
 
 ```bash
-# Build the image
+# Build a profile using the feature overlay system
+./compose-profile.sh wg-mesh-ipv6
+./build-profile.sh wg-mesh-ipv6 --sign-key /path/to/key
+
+# Or use legacy build
 make build
-
-# Boot-test in headless QEMU
-make boot-test
-
-# Create signed bundle
-make bundle
 ```
+
+## Feature Overlay System (New)
+
+The feature overlay system provides modular, composable image building:
+
+```
+features/           # Modular capabilities
+├── base-minimal/   # Core system, cloud-init, selftest
+├── vpn-wireguard/  # WireGuard mesh networking
+├── vpn-tailscale/  # Tailscale managed networking
+├── rendezvous-ipv6/# IPv6 peer discovery
+├── control-mtls/   # mTLS control plane
+├── discovery-bonjour/ # mDNS/Bonjour (LAN)
+└── wan-nat/        # NAT traversal
+
+profiles/           # Profile compositions
+├── no-vpn-minimal.yaml    # Base only
+├── wg-mesh-ipv6.yaml      # WireGuard + IPv6 rendezvous
+├── ts-managed.yaml        # Tailscale managed
+├── dual-vpn-separated.yaml # Both with policy routing
+├── wg-bonjour.yaml        # WireGuard + mDNS
+└── ts-mtls.yaml           # Tailscale + mTLS
+```
+
+See [Feature Overlay Documentation](docs/FEATURE_OVERLAYS.md) for details.
 
 ## Features
 
-- **Minimal Alpine Linux** (3.20, ~150MB compressed)
+- **Minimal Alpine Linux** (3.19, ~150MB compressed)
 - **QEMU-bootable** with virtio drivers
 - **Network tools**: iproute2, iptables, nftables, tcpdump
+- **VPN options**: WireGuard, Tailscale, or both
+- **IPv6 Rendezvous**: Peer discovery without multicast
+- **Ed25519 Signatures**: Cryptographic peer verification
+- **Selftest Framework**: Built-in validation
+- **Signed Provenance**: in-toto attestations
 - **Utilities**: bash, curl, jq, python3
 - **Cloud-init** for automated configuration
-- **Telemetry agent stub** for future LoRaWAN integration
 
 ## Prerequisites
 

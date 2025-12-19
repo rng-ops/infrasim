@@ -1,0 +1,82 @@
+# Bonjour/mDNS Discovery Feature Overlay
+# OPTIONAL: LAN-based peer discovery for compatibility
+
+name: discovery-bonjour
+version: 1.0.0
+description: >
+  Optional Bonjour/mDNS compatibility layer for LAN-based peer discovery.
+  This is provided for compatibility with existing infrastructure that
+  relies on mDNS. For new deployments, prefer rendezvous-ipv6.
+  
+  NOTE: mDNS only works on the local LAN segment. This overlay is NOT
+  a replacement for IPv6 rendezvous in routed networks.
+
+requires:
+  - base-minimal
+
+conflicts: []
+
+packages:
+  - avahi-daemon
+  - avahi-tools
+  - dbus
+
+services_enable:
+  - dbus
+  - avahi-daemon
+
+files:
+  - source: files/infrasim.service
+    destination: /etc/avahi/services/infrasim.service
+    mode: "0644"
+  - source: files/avahi-daemon.conf
+    destination: /etc/avahi/avahi-daemon.conf
+    mode: "0644"
+  - source: files/browse-peers.sh
+    destination: /usr/local/bin/browse-peers.sh
+    mode: "0755"
+
+firewall_fragment: |
+  table inet filter {
+    chain input {
+      # mDNS multicast
+      udp dport 5353 ip daddr 224.0.0.251 accept comment "mDNS IPv4"
+      udp dport 5353 ip6 daddr ff02::fb accept comment "mDNS IPv6"
+    }
+  }
+
+config_schema:
+  type: object
+  properties:
+    service_name:
+      type: string
+      default: "infrasim"
+      description: Service type name for mDNS
+    service_port:
+      type: integer
+      default: 51820
+      description: Port to advertise (usually WireGuard)
+    publish_hinfo:
+      type: boolean
+      default: false
+      description: Publish host info (disabled for security)
+    publish_workstation:
+      type: boolean
+      default: false
+      description: Publish workstation type (disabled for security)
+    allow_interfaces:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Interfaces to allow (empty = all)
+    deny_interfaces:
+      type: array
+      items:
+        type: string
+      default: ["wg0"]
+      description: Interfaces to deny (WireGuard excluded by default)
+
+selftest:
+  - test_avahi_running
+  - test_mdns_browsable

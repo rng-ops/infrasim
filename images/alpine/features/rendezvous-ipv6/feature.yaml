@@ -1,0 +1,87 @@
+# IPv6 Rendezvous Feature Overlay
+# Provides epoch/slot-based IPv6 peer discovery without LAN multicast
+
+name: rendezvous-ipv6
+version: 1.0.0
+description: >
+  IPv6-based rendezvous for peer discovery without relying on LAN multicast.
+  Uses HMAC-derived link-local addresses with epoch/slot timing for bounded
+  discovery windows. Cryptographic - discovery is a convenience, identity
+  is verified via Ed25519 signatures.
+
+requires:
+  - base-minimal
+
+conflicts: []
+
+packages:
+  - python3
+  - py3-cryptography
+
+services_enable:
+  - rendezvousd
+
+files:
+  - source: files/rendezvousd.py
+    destination: /usr/local/bin/rendezvousd
+    mode: "0755"
+  - source: files/rendezvous-client.py
+    destination: /usr/local/bin/rendezvous-client
+    mode: "0755"
+  - source: files/rendezvous.conf
+    destination: /etc/infrasim/rendezvous.conf
+    mode: "0644"
+  - source: files/rendezvousd.openrc
+    destination: /etc/init.d/rendezvousd
+    mode: "0755"
+
+firewall_fragment: |
+  table inet filter {
+    chain input {
+      # Allow ICMPv6 for rendezvous neighbor discovery
+      meta l4proto icmpv6 accept comment "ICMPv6 for rendezvous"
+      
+      # Rendezvous UDP port (ephemeral, derived from slot)
+      # Actual port opened dynamically by rendezvousd
+    }
+  }
+
+config_schema:
+  type: object
+  required:
+    - mesh_secret
+  properties:
+    mesh_secret:
+      type: string
+      description: >
+        Shared secret for HMAC-based address derivation.
+        All nodes in the mesh must share this secret.
+    epoch_seconds:
+      type: integer
+      default: 60
+      description: Duration of each epoch in seconds
+    slots_per_epoch:
+      type: integer
+      default: 4
+      description: Number of slots per epoch (discovery windows)
+    slot_duration_ms:
+      type: integer
+      default: 500
+      description: Duration of each slot in milliseconds
+    interface:
+      type: string
+      default: "eth0"
+      description: Network interface for rendezvous
+    max_peers:
+      type: integer
+      default: 64
+      description: Maximum number of peers to track
+    peer_callback:
+      type: string
+      default: "/usr/local/bin/apply-peers.sh add"
+      description: Command to call when a new peer is discovered
+
+selftest:
+  - test_rendezvous_running
+  - test_rendezvous_address_derivation
+  - test_rendezvous_slot_timing

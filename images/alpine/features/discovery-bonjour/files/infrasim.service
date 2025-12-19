@@ -1,0 +1,20 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">%h - infrasim</name>
+  
+  <service>
+    <type>_infrasim._udp</type>
+    <port>51820</port>
+    
+    <!-- Node metadata as TXT records -->
+    <txt-record>version=1.0.0</txt-record>
+    <txt-record>proto=wireguard</txt-record>
+    
+    <!-- Node ID will be set dynamically by cloud-init -->
+    <!-- <txt-record>node_id=...</txt-record> -->
+    
+    <!-- Public key fingerprint (first 16 chars of base64) -->
+    <!-- <txt-record>pubkey=...</txt-record> -->
+  </service>
+</service-group>

@@ -1,0 +1,83 @@
+# Profile: Dual VPN Separated
+# Both WireGuard and Tailscale with policy routing
+# Use case: Complex environments requiring traffic separation
+
+name: dual-vpn-separated
+version: 1.0.0
+description: >
+  Dual VPN configuration with WireGuard and Tailscale running
+  simultaneously. Uses policy routing to separate traffic.
+  WireGuard handles internal mesh, Tailscale for external access.
+
+base: alpine:3.19
+
+features:
+  - base-minimal
+  - vpn-wireguard
+  - vpn-tailscale
+  - rendezvous-ipv6
+  - wan-nat
+
+feature_config:
+  vpn-wireguard:
+    listen_port: 51820
+    network_cidr: "10.100.0.0/16"
+    network_cidr6: "fd00:wg::/48"
+    persistent_keepalive: 25
+    narrow_admission: true
+    table: "100"
+    fwmark: "0x51820"
+  
+  vpn-tailscale:
+    accept_routes: true
+    exit_node: false
+  
+  rendezvous-ipv6:
+    epoch_seconds: 60
+    slots_per_epoch: 4
+
+# Policy routing configuration
+routing:
+  tables:
+    - id: 100
+      name: wireguard
+      priority: 100
+      rules:
+        - fwmark: "0x51820"
+    - id: 200
+      name: tailscale
+      priority: 200
+      rules:
+        - from: "100.64.0.0/10"  # Tailscale CGNAT range
+  
+  default_route: tailscale  # External traffic via Tailscale
+
+test_requirements:
+  - boot_successful
+  - cloud_init_complete
+  - ssh_accessible
+  - selftest_passes
+  - wireguard_up
+  - tailscale_connected
+  - policy_routing_active
+
+build_options:
+  format: qcow2
+  compression: true
+  size: 3G
+
+metadata:
+  use_cases:
+    - traffic_separation
+    - hybrid_networking
+    - complex_topology
+  network_requirements:
+    - ipv4
+    - ipv6
+    - outbound_https
+  security_level: high
+  requires_secrets:
+    - mesh_secret
+    - auth_key
+  external_dependencies:
+    - tailscale.com

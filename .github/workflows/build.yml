@@ -49,28 +49,6 @@ jobs:
         path: target
         key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
     
-    - name: ICMP Timing Probes (Pre-Build)
-      id: timing_pre
-      run: |
-        echo "=== Network Timing Fingerprint (Pre-Build) ===" | tee timing-pre.txt
-        echo "timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a timing-pre.txt
-        echo "github_run_id: ${{ github.run_id }}" | tee -a timing-pre.txt
-        echo "" | tee -a timing-pre.txt
-        
-        # Probe time servers for BGP path inference
-        for host in time.google.com time.cloudflare.com time.apple.com time.nist.gov pool.ntp.org; do
-          echo "Probing $host..." | tee -a timing-pre.txt
-          ping -c 3 -W 2 $host 2>&1 | tail -1 | tee -a timing-pre.txt || echo "  Failed" | tee -a timing-pre.txt
-        done
-        
-        # Geographic reference probes
-        echo "" | tee -a timing-pre.txt
-        echo "=== Geographic References ===" | tee -a timing-pre.txt
-        for host in ping.online.net speedtest.tele2.net; do
-          echo "Probing $host..." | tee -a timing-pre.txt
-          ping -c 3 -W 2 $host 2>&1 | tail -1 | tee -a timing-pre.txt || echo "  Failed" | tee -a timing-pre.txt
-        done
-    
     - name: Run build pipeline
       run: |
         chmod +x build.sh
@@ -80,18 +58,6 @@ jobs:
     
     - name: Run tests
       run: cargo test --all --verbose
-    
-    - name: ICMP Timing Probes (Post-Build)
-      id: timing_post
-      run: |
-        echo "=== Network Timing Fingerprint (Post-Build) ===" | tee timing-post.txt
-        echo "timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a timing-post.txt
-        echo "" | tee -a timing-post.txt
-        
-        for host in time.google.com time.cloudflare.com time.apple.com; do
-          echo "Probing $host..." | tee -a timing-post.txt
-          ping -c 3 -W 2 $host 2>&1 | tail -1 | tee -a timing-post.txt || echo "  Failed" | tee -a timing-post.txt
-        done
     
     - name: Setup ISVM
       run: |
@@ -136,8 +102,6 @@ jobs:
           dist/*.sha256
           dist/manifest.json
           dist/version-metadata.json
-          timing-pre.txt
-          timing-post.txt
         retention-days: 30
     
     - name: Upload ISVM metadata
@@ -157,8 +121,6 @@ jobs:
           dist/*.sha256
           dist/manifest.json
           dist/version-metadata.json
-          timing-pre.txt
-          timing-post.txt
         body: |
           ## InfraSim Release ${{ github.ref_name }}
           
@@ -201,7 +163,6 @@ jobs:
           ### Build Provenance
           - Commit: ${{ github.sha }}
           - Run ID: ${{ github.run_id }}
-          - Timing probes included for network path analysis
         draft: false
         prerelease: false
       env:

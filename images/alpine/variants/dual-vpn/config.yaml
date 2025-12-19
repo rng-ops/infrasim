@@ -1,0 +1,251 @@
+# Alpine Variant: dual-vpn
+# ===========================
+# Alpine image with both WireGuard (data plane) and Tailscale (control plane).
+# Separation of concerns: WireGuard for high-speed VPN, Tailscale for C2.
+
+variant: dual-vpn
+description: "Alpine Linux with WireGuard data plane and Tailscale control plane"
+base_image: alpine
+alpine_version: "3.20"
+
+# Variant-specific packages (combines wireguard and tailscale)
+packages:
+  # WireGuard stack
+  - wireguard-tools
+  - wireguard-lts
+  - avahi
+  - avahi-tools
+  - libqrencode
+  # Tailscale stack
+  - tailscale
+  - tailscale-openrc
+  # Common utilities
+  - curl
+  - jq
+
+# Services to enable
+services:
+  - sshd
+  - dhcpcd
+  - chronyd
+  - tailscaled
+  - wireguard
+  - avahi-daemon
+
+# Services explicitly disabled
+services_disabled: []
+
+# Network configuration
+network:
+  interfaces:
+    - name: eth0
+      type: dhcp
+      description: "Physical network"
+    - name: wg0
+      type: wireguard
+      description: "Data plane VPN (high-speed, peer-to-peer)"
+      config_template: wg0.conf.template
+    - name: tailscale0
+      type: tailscale
+      description: "Control plane (C2, telemetry, management)"
+
+# Traffic routing policy
+routing:
+  # Control plane traffic via Tailscale
+  control_plane:
+    interface: tailscale0
+    routes:
+      - "100.64.0.0/10"  # Tailscale CGNAT range
+    services:
+      - ssh
+      - telemetry
+      - management
+      - file_transfer
+      
+  # Data plane traffic via WireGuard
+  data_plane:
+    interface: wg0
+    routes:
+      - "10.50.0.0/16"  # InfraSim mesh
+    services:
+      - vm_traffic
+      - storage_replication
+      - live_migration
+
+# WireGuard configuration (data plane)
+wireguard:
+  interface:
+    name: wg0
+    listen_port: 51820
+    address_template: "10.50.{subnet}.{host}/24"
+    mtu: 1420
+    dns: null
+    
+  mesh:
+    enabled: true
+    discovery:
+      type: dns-sd
+      service_name: "_wireguard._udp"
+    key_rotation: 168
+    persistent_keepalive: 25
+    
+  # Mark packets for policy routing
+  fwmark: 51820
+
+# Tailscale configuration (control plane)
+tailscale:
+  auth:
+    auth_key_env: "TAILSCALE_AUTH_KEY"
+    interactive: false
+    
+  node:
+    hostname: "{HOSTNAME}"
+    advertise_exit_node: false
+    accept_dns: true
+    accept_routes: true
+    ssh: true
+    
+  tags:
+    - "tag:infrasim"
+    - "tag:alpine"
+    - "tag:dual-vpn"
+    
+  control_url: null
+  state_dir: /var/lib/tailscale
+
+# Cloud-init modules enabled
+cloud_init:
+  modules:
+    - ssh
+    - users-groups
+    - write-files
+    - runcmd
+    - final-message
+    
+  write_files:
+    # WireGuard config
+    - path: /etc/wireguard/wg0.conf
+      permissions: "0600"
+      content_template: wg0.conf.template
+      
+    - path: /opt/infrasim/wireguard/peer-discovery.sh
+      permissions: "0755"
+      content_file: peer-discovery.sh
+      
+    # Tailscale config
+    - path: /opt/infrasim/tailscale/tailscale-up.sh
+      permissions: "0755"
+      content_file: tailscale-up.sh
+      
+    - path: /etc/infrasim/tailscale/config.json
+      permissions: "0600"
+      content: |
+        {
+          "advertise_exit_node": false,
+          "accept_dns": true,
+          "accept_routes": true,
+          "ssh": true,
+          "tags": ["tag:infrasim", "tag:alpine", "tag:dual-vpn"]
+        }
+      
+    # Policy routing script
+    - path: /opt/infrasim/network/policy-routing.sh
+      permissions: "0755"
+      content_file: policy-routing.sh
+      
+    # Network isolation config
+    - path: /etc/infrasim/network/isolation.json
+      permissions: "0644"
+      content: |
+        {
+          "control_plane": {
+            "interface": "tailscale0",
+            "mark": "0x100",
+            "table": 100
+          },
+          "data_plane": {
+            "interface": "wg0",
+            "mark": "0x200",
+            "table": 200
+          },
+          "isolation_enabled": true
+        }
+      
+  runcmd:
+    # Start Tailscale first (C2)
+    - "rc-service tailscaled start"
+    - "/opt/infrasim/tailscale/tailscale-up.sh"
+    # Then WireGuard (data plane)
+    - "wg-quick up wg0 || true"
+    - "/opt/infrasim/wireguard/peer-discovery.sh &"
+    # Configure policy routing
+    - "/opt/infrasim/network/policy-routing.sh"
+
+# Telemetry configuration
+telemetry:
+  enabled: true
+  agent: /opt/infrasim/telemetry/telemetry-agent.sh
+  # Export via Tailscale (control plane)
+  export:
+    type: tailscale
+    endpoint: "http://coordination:8080/telemetry"
+    interval: 30
+  # Combined metrics from both VPNs
+  metrics:
+    # Tailscale metrics
+    - ts_online
+    - ts_peer_count
+    - ts_derp_region
+    # WireGuard metrics
+    - wg_peer_rx_bytes
+    - wg_peer_tx_bytes
+    - wg_peer_last_handshake
+    # Combined metrics
+    - vpn_isolation_status
+    - policy_routing_active
+
+# Security hardening
+security:
+  disable_ipv6: false
+  ssh:
+    permit_root_login: false
+    password_authentication: false
+    pubkey_authentication: true
+  firewall:
+    default_input: drop
+    default_forward: drop
+    default_output: accept
+    rules:
+      - comment: "Allow established connections"
+        rule: "ct state established,related accept"
+      - comment: "Allow loopback"
+        rule: "iif lo accept"
+      - comment: "Allow SSH (fallback only)"
+        rule: "tcp dport 22 accept"
+      - comment: "Allow WireGuard"
+        rule: "udp dport 51820 accept"
+      - comment: "Allow Tailscale"
+        rule: "udp dport 41641 accept"
+      - comment: "Allow ICMP"
+        rule: "icmp type echo-request accept"
+      - comment: "Allow WireGuard interface"
+        rule: "iif wg0 accept"
+      - comment: "Allow Tailscale interface"
+        rule: "iif tailscale0 accept"
+      - comment: "Block cross-interface traffic (isolation)"
+        rule: "iif wg0 oif tailscale0 drop"
+      - comment: "Block cross-interface traffic (isolation)"
+        rule: "iif tailscale0 oif wg0 drop"
+
+# Overlay metadata
+overlay:
+  name: overlay-dual-vpn.qcow2
+  compression: zstd
+  hash: null
+
+# Build metadata
+build:
+  script: build-variant.sh
+  args:
+    - --variant=dual-vpn
+  runner_label: infrasim-runner-dual-vpn

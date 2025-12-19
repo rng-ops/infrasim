@@ -1,0 +1,114 @@
+# VPN WireGuard Feature Overlay
+# Provides WireGuard mesh networking with signature-verified peer admission
+
+name: vpn-wireguard
+version: 1.0.0
+description: >
+  WireGuard mesh networking with Ed25519 signature-verified peer admission.
+  Peers start with narrow AllowedIPs (/128 or /32) and are only widened after
+  cryptographic verification of their node descriptors.
+
+requires:
+  - base-minimal
+
+conflicts:
+  - vpn-tailscale  # Use profiles to run both with policy routing
+
+packages:
+  - wireguard-tools
+  - wireguard-tools-wg-quick
+  - iproute2
+
+services_enable:
+  - wg-quick@wg0
+
+services_disable: []
+
+files:
+  - source: files/apply-peers.sh
+    destination: /usr/local/bin/apply-peers.sh
+    mode: "0755"
+  - source: files/wg-keygen.sh
+    destination: /usr/local/bin/wg-keygen.sh
+    mode: "0755"
+  - source: files/wg0.conf.template
+    destination: /etc/wireguard/wg0.conf.template
+    mode: "0600"
+  - source: files/wg-up.sh
+    destination: /etc/wireguard/wg-up.sh
+    mode: "0755"
+  - source: files/wg-down.sh
+    destination: /etc/wireguard/wg-down.sh
+    mode: "0755"
+
+firewall_fragment: |
+  # WireGuard base rules
+  table inet filter {
+    chain input {
+      # WireGuard UDP listener
+      udp dport 51820 accept comment "WireGuard"
+      
+      # Allow traffic from WireGuard interface
+      iifname "wg0" accept comment "WireGuard tunnel traffic"
+    }
+    
+    chain forward {
+      # Allow forwarding through WireGuard tunnel (if relay role)
+      iifname "wg0" oifname "wg0" accept comment "WireGuard relay"
+    }
+  }
+  
+  table inet mangle {
+    chain prerouting {
+      # Mark WireGuard traffic for policy routing
+      iifname "wg0" meta mark set 0x51820
+    }
+  }
+
+config_schema:
+  type: object
+  required:
+    - listen_port
+    - network_cidr
+  properties:
+    listen_port:
+      type: integer
+      default: 51820
+      description: UDP port for WireGuard listener
+    network_cidr:
+      type: string
+      default: "10.100.0.0/16"
+      description: IPv4 CIDR for WireGuard mesh
+    network_cidr6:
+      type: string
+      default: "fd00:wg::/48"
+      description: IPv6 CIDR for WireGuard mesh
+    persistent_keepalive:
+      type: integer
+      default: 25
+      description: Keepalive interval in seconds (0 to disable)
+    narrow_admission:
+      type: boolean
+      default: true
+      description: Start with /32 or /128 AllowedIPs until signature verified
+    require_preshared_key:
+      type: boolean
+      default: false
+      description: Require preshared keys for additional security
+    mtu:
+      type: integer
+      default: 1420
+      description: MTU for WireGuard interface
+    table:
+      type: string
+      default: "auto"
+      description: Routing table (auto, off, or table number)
+    fwmark:
+      type: integer
+      default: 0x51820
+      description: Firewall mark for WireGuard traffic
+
+selftest:
+  - test_wg_interface_up
+  - test_wg_handshake_recent
+  - test_wg_peer_verified

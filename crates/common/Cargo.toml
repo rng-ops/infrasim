@@ -6,6 +6,13 @@ authors.workspace = true
 license.workspace = true
 description = "Common types and utilities for InfraSim"
 
+[features]
+default = []
+# Optional network timing context collection.
+# When enabled, allows opt-in ICMP timing probes for coarse RTT statistics.
+# OFF by default - requires explicit feature enablement AND runtime config.
+network-context = []
+
 [dependencies]
 tokio = { workspace = true }
 serde = { workspace = true }

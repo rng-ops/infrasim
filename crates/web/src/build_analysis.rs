@@ -3,7 +3,7 @@
 //! Provides HTTP endpoints for:
 //! - Dependency graph visualization
 //! - Vendor convergence pattern detection
-//! - ICMP timing probes for BGP path inference
+//! - Optional network timing probes (opt-in, privacy-respecting)
 //! - Build pipeline static analysis
 
 use axum::{
@@ -13,7 +13,8 @@ use axum::{
     Json,
 };
 use infrasim_common::pipeline::{
-    AnalysisReport, DependencyGraph, NetworkFingerprint, PipelineAnalyzer, TimingProbe,
+    AggregatedTimingStats, AnalysisReport, DependencyGraph, NetworkFingerprint,
+    NetworkTimingConfig, PipelineAnalyzer, ProbeTarget, TimingProbe,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -72,12 +73,17 @@ pub struct AnalyzeWorkspaceResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct TimingProbeRequest {
-    /// Custom hosts to probe (optional, uses defaults if empty)
+    /// Custom hosts to probe (required, no defaults)
+    /// User must explicitly provide probe targets for privacy
     #[serde(default)]
-    pub custom_hosts: Vec<CustomProbeHost>,
-    /// Include default time servers
-    #[serde(default = "default_true")]
-    pub include_defaults: bool,
+    pub probe_targets: Vec<ProbeTargetRequest>,
+    /// Timeout per probe in milliseconds
+    #[serde(default = "default_timeout")]
+    pub timeout_ms: u64,
+}
+
+fn default_timeout() -> u64 {
+    2000
 }
 
 fn default_true() -> bool {
@@ -85,11 +91,9 @@ fn default_true() -> bool {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct CustomProbeHost {
+pub struct ProbeTargetRequest {
     pub host: String,
     pub label: String,
-    #[serde(default)]
-    pub region: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -98,6 +102,7 @@ pub struct TimingProbeResponse {
     pub summary: TimingSummary,
 }
 
+/// Coarse-grained timing summary (privacy-respecting)
 #[derive(Debug, Serialize)]
 pub struct TimingSummary {
     pub total_probes: usize,
@@ -105,8 +110,6 @@ pub struct TimingSummary {
     pub average_rtt_ms: Option<f64>,
     pub min_rtt_ms: Option<f64>,
     pub max_rtt_ms: Option<f64>,
-    pub inferred_region: Option<String>,
-    pub anomaly_count: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -451,24 +454,11 @@ pub async fn analyze_workspace_handler(
         }
     };
 
-    // Optionally run timing probes
-    let timing = if req.include_timing {
-        let fingerprint = tokio::task::spawn_blocking(NetworkFingerprint::collect)
-            .await
-            .ok();
-
-        if let Some(ref fp) = fingerprint {
-            let mut history = cache.timing_history.write().await;
-            history.push(fp.clone());
-            if history.len() > cache.max_history {
-                history.remove(0);
-            }
-        }
-
-        fingerprint
-    } else {
-        None
-    };
+    // Optionally run timing probes (disabled by default, requires explicit configuration)
+    // Note: Network timing requires the network-context feature to be enabled
+    let timing: Option<NetworkFingerprint> = None;
+    // Network timing is now opt-in via the dedicated timing probe endpoint
+    // with user-provided targets. Not included in workspace analysis by default.
 
     // Cache the analysis
     {
@@ -587,41 +577,54 @@ pub async fn get_suspicious_patterns_handler(
     }
 }
 
-/// Run ICMP timing probes
+/// Run ICMP timing probes (opt-in, user-provided targets only)
+///
+/// Network timing is privacy-respecting:
+/// - No hardcoded servers
+/// - User must provide explicit probe targets
+/// - Only coarse aggregated RTT stats collected
+/// - Requires network-context feature to be enabled
 pub async fn run_timing_probes_handler(
     State(cache): State<Arc<AnalysisCache>>,
     Json(req): Json<TimingProbeRequest>,
 ) -> impl IntoResponse {
-    let fingerprint = tokio::task::spawn_blocking(move || {
-        if req.include_defaults {
-            NetworkFingerprint::collect()
-        } else {
-            // Custom probes only - would need to extend NetworkFingerprint
-            // For now, just collect defaults
-            NetworkFingerprint::collect()
-        }
+    // Check if user provided any probe targets
+    if req.probe_targets.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "No probe targets provided. Network timing is opt-in and requires explicit probe targets.",
+                "hint": "Provide probe_targets array with host and label for each target."
+            })),
+        )
+            .into_response();
+    }
+
+    // Convert request targets to config
+    let config = NetworkTimingConfig::with_targets(
+        req.probe_targets
+            .into_iter()
+            .map(|t| ProbeTarget {
+                host: t.host,
+                label: t.label,
+            })
+            .collect(),
+    );
+
+    let fingerprint_result: Result<Option<NetworkFingerprint>, _> = tokio::task::spawn_blocking(move || {
+        NetworkFingerprint::collect(&config)
     })
     .await;
 
-    match fingerprint {
-        Ok(fp) => {
-            // Calculate summary
-            let successful: Vec<&TimingProbe> =
-                fp.probes.iter().filter(|p| p.success).collect();
-            let rtts: Vec<f64> = successful.iter().filter_map(|p| p.rtt_ms).collect();
-
+    match fingerprint_result {
+        Ok(Some(fp)) => {
+            // Use the aggregated stats from the fingerprint
             let summary = TimingSummary {
-                total_probes: fp.probes.len(),
-                successful_probes: successful.len(),
-                average_rtt_ms: if rtts.is_empty() {
-                    None
-                } else {
-                    Some(rtts.iter().sum::<f64>() / rtts.len() as f64)
-                },
-                min_rtt_ms: rtts.iter().cloned().reduce(f64::min),
-                max_rtt_ms: rtts.iter().cloned().reduce(f64::max),
-                inferred_region: fp.inferred_region.clone(),
-                anomaly_count: fp.routing_anomalies.len(),
+                total_probes: fp.aggregated_stats.total_probes,
+                successful_probes: fp.aggregated_stats.successful_probes,
+                average_rtt_ms: fp.aggregated_stats.avg_rtt_ms,
+                min_rtt_ms: fp.aggregated_stats.min_rtt_ms,
+                max_rtt_ms: fp.aggregated_stats.max_rtt_ms,
             };
 
             // Store in history
@@ -642,6 +645,14 @@ pub async fn run_timing_probes_handler(
             )
                 .into_response()
         }
+        Ok(None) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "Network timing feature not available",
+                "hint": "The network-context feature must be enabled at compile time."
+            })),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({

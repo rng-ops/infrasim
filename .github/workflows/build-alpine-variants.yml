@@ -1,0 +1,502 @@
+# ============================================================================
+# build-alpine-variants.yml - Build Alpine Image Variants with Self-Hosted Runners
+# ============================================================================
+#
+# This workflow builds four Alpine Linux image variants with different VPN
+# configurations. Each variant is built on a dedicated self-hosted runner
+# provisioned via Terraform.
+#
+# VARIANTS:
+#   - no-vpn:    Base image without VPN software
+#   - wireguard: WireGuard mesh VPN for peer-to-peer networking
+#   - tailscale: Tailscale for centralized control plane (like Docker Swarm)
+#   - dual-vpn:  WireGuard (data) + Tailscale (C2) for hostile territory
+#
+# RUNNERS:
+#   Each variant has its own labeled runner:
+#   - infrasim-runner-no-vpn
+#   - infrasim-runner-wireguard
+#   - infrasim-runner-tailscale
+#   - infrasim-runner-dual-vpn
+#
+name: Build Alpine Variants
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'images/alpine/**'
+      - '.github/workflows/build-alpine-variants.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'images/alpine/**'
+      - '.github/workflows/build-alpine-variants.yml'
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: 'Variant to build (or "all")'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - no-vpn
+          - wireguard
+          - tailscale
+          - dual-vpn
+      alpine_version:
+        description: 'Alpine Linux version'
+        required: false
+        default: '3.20'
+      use_self_hosted:
+        description: 'Use self-hosted runners'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  ALPINE_VERSION: ${{ github.event.inputs.alpine_version || '3.20' }}
+  USE_SELF_HOSTED: ${{ github.event.inputs.use_self_hosted || 'true' }}
+
+jobs:
+  # ===========================================================================
+  # Provision Runners via Terraform (if needed)
+  # ===========================================================================
+  provision-runners:
+    name: Provision Runners
+    runs-on: ubuntu-latest
+    if: github.event.inputs.use_self_hosted == 'true' || github.event.inputs.use_self_hosted == ''
+    
+    outputs:
+      runners_ready: ${{ steps.provision.outputs.ready }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: "1.6.0"
+    
+    - name: Provision runners
+      id: provision
+      working-directory: examples/terraform/github-runners
+      run: |
+        # Check if runners already exist
+        if gh api repos/${{ github.repository }}/actions/runners --jq '.runners | length' | grep -q "^[4-9]"; then
+          echo "Runners already provisioned"
+          echo "ready=true" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+        
+        # Initialize Terraform
+        terraform init
+        
+        # Apply configuration
+        terraform apply -auto-approve \
+          -var="github_token=${{ secrets.RUNNER_REGISTRATION_TOKEN }}" \
+          -var="github_repo=${{ github.repository }}"
+        
+        echo "ready=true" >> $GITHUB_OUTPUT
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      continue-on-error: true
+
+  # ===========================================================================
+  # Build Base Image (shared by all variants)
+  # ===========================================================================
+  build-base:
+    name: Build Base Image
+    runs-on: ubuntu-latest
+    needs: [provision-runners]
+    if: always() && (needs.provision-runners.result == 'success' || needs.provision-runners.result == 'skipped')
+    
+    outputs:
+      base_sha256: ${{ steps.build.outputs.sha256 }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          qemu-utils \
+          qemu-system-aarch64 \
+          genisoimage \
+          jq
+    
+    - name: Build base Alpine image
+      id: build
+      run: |
+        chmod +x images/alpine/build-alpine-qcow2.sh
+        cd images/alpine
+        
+        ./build-alpine-qcow2.sh \
+          --version ${{ env.ALPINE_VERSION }} \
+          --arch aarch64 \
+          --size 2G \
+          --output output/base.qcow2
+        
+        SHA256=$(sha256sum output/base.qcow2 | awk '{print $1}')
+        echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+      env:
+        SOURCE_DATE_EPOCH: ${{ github.event.repository.pushed_at || '0' }}
+    
+    - name: Upload base image
+      uses: actions/upload-artifact@v4
+      with:
+        name: alpine-base
+        path: |
+          images/alpine/output/base.qcow2
+          images/alpine/output/meta/
+        retention-days: 1
+
+  # ===========================================================================
+  # Build no-vpn Variant
+  # ===========================================================================
+  build-no-vpn:
+    name: Build no-vpn Variant
+    runs-on: ${{ github.event.inputs.use_self_hosted == 'true' && 'infrasim-runner-no-vpn' || 'ubuntu-latest' }}
+    needs: [build-base]
+    if: github.event.inputs.variant == 'all' || github.event.inputs.variant == 'no-vpn' || github.event.inputs.variant == ''
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y qemu-utils jq
+        # Install yq for YAML parsing
+        sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+        sudo chmod +x /usr/local/bin/yq
+    
+    - name: Download base image
+      uses: actions/download-artifact@v4
+      with:
+        name: alpine-base
+        path: images/alpine/output/
+    
+    - name: Build no-vpn variant
+      run: |
+        chmod +x images/alpine/build-variant.sh
+        cd images/alpine
+        
+        ./build-variant.sh \
+          --variant=no-vpn \
+          --base=output/base.qcow2 \
+          --output=output/alpine-no-vpn.qcow2
+    
+    - name: Upload no-vpn variant
+      uses: actions/upload-artifact@v4
+      with:
+        name: alpine-no-vpn
+        path: |
+          images/alpine/output/alpine-no-vpn.qcow2
+          images/alpine/output/overlay-no-vpn.qcow2
+          images/alpine/output/meta/variant-no-vpn-provenance.json
+        retention-days: 30
+
+  # ===========================================================================
+  # Build wireguard Variant
+  # ===========================================================================
+  build-wireguard:
+    name: Build wireguard Variant
+    runs-on: ${{ github.event.inputs.use_self_hosted == 'true' && 'infrasim-runner-wireguard' || 'ubuntu-latest' }}
+    needs: [build-base]
+    if: github.event.inputs.variant == 'all' || github.event.inputs.variant == 'wireguard' || github.event.inputs.variant == ''
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y qemu-utils jq wireguard-tools
+        sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+        sudo chmod +x /usr/local/bin/yq
+    
+    - name: Download base image
+      uses: actions/download-artifact@v4
+      with:
+        name: alpine-base
+        path: images/alpine/output/
+    
+    - name: Build wireguard variant
+      run: |
+        chmod +x images/alpine/build-variant.sh
+        cd images/alpine
+        
+        ./build-variant.sh \
+          --variant=wireguard \
+          --base=output/base.qcow2 \
+          --output=output/alpine-wireguard.qcow2
+    
+    - name: Generate WireGuard test keys
+      run: |
+        cd images/alpine/output
+        
+        # Generate a test keypair for CI verification
+        wg genkey | tee test-private.key | wg pubkey > test-public.key
+        
+        # Record in provenance
+        jq --arg pubkey "$(cat test-public.key)" \
+          '. + {test_keys: {public_key: $pubkey}}' \
+          meta/variant-wireguard-provenance.json > meta/tmp.json
+        mv meta/tmp.json meta/variant-wireguard-provenance.json
+        
+        rm test-private.key test-public.key
+    
+    - name: Upload wireguard variant
+      uses: actions/upload-artifact@v4
+      with:
+        name: alpine-wireguard
+        path: |
+          images/alpine/output/alpine-wireguard.qcow2
+          images/alpine/output/overlay-wireguard.qcow2
+          images/alpine/output/meta/variant-wireguard-provenance.json
+        retention-days: 30
+
+  # ===========================================================================
+  # Build tailscale Variant
+  # ===========================================================================
+  build-tailscale:
+    name: Build tailscale Variant
+    runs-on: ${{ github.event.inputs.use_self_hosted == 'true' && 'infrasim-runner-tailscale' || 'ubuntu-latest' }}
+    needs: [build-base]
+    if: github.event.inputs.variant == 'all' || github.event.inputs.variant == 'tailscale' || github.event.inputs.variant == ''
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y qemu-utils jq
+        sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+        sudo chmod +x /usr/local/bin/yq
+        
+        # Install Tailscale for verification
+        curl -fsSL https://tailscale.com/install.sh | sh
+    
+    - name: Download base image
+      uses: actions/download-artifact@v4
+      with:
+        name: alpine-base
+        path: images/alpine/output/
+    
+    - name: Build tailscale variant
+      run: |
+        chmod +x images/alpine/build-variant.sh
+        cd images/alpine
+        
+        ./build-variant.sh \
+          --variant=tailscale \
+          --base=output/base.qcow2 \
+          --output=output/alpine-tailscale.qcow2
+    
+    - name: Upload tailscale variant
+      uses: actions/upload-artifact@v4
+      with:
+        name: alpine-tailscale
+        path: |
+          images/alpine/output/alpine-tailscale.qcow2
+          images/alpine/output/overlay-tailscale.qcow2
+          images/alpine/output/meta/variant-tailscale-provenance.json
+        retention-days: 30
+
+  # ===========================================================================
+  # Build dual-vpn Variant
+  # ===========================================================================
+  build-dual-vpn:
+    name: Build dual-vpn Variant
+    runs-on: ${{ github.event.inputs.use_self_hosted == 'true' && 'infrasim-runner-dual-vpn' || 'ubuntu-latest' }}
+    needs: [build-base]
+    if: github.event.inputs.variant == 'all' || github.event.inputs.variant == 'dual-vpn' || github.event.inputs.variant == ''
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y qemu-utils jq wireguard-tools nftables
+        sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+        sudo chmod +x /usr/local/bin/yq
+        
+        # Install Tailscale
+        curl -fsSL https://tailscale.com/install.sh | sh
+    
+    - name: Download base image
+      uses: actions/download-artifact@v4
+      with:
+        name: alpine-base
+        path: images/alpine/output/
+    
+    - name: Build dual-vpn variant
+      run: |
+        chmod +x images/alpine/build-variant.sh
+        cd images/alpine
+        
+        ./build-variant.sh \
+          --variant=dual-vpn \
+          --base=output/base.qcow2 \
+          --output=output/alpine-dual-vpn.qcow2
+    
+    - name: Upload dual-vpn variant
+      uses: actions/upload-artifact@v4
+      with:
+        name: alpine-dual-vpn
+        path: |
+          images/alpine/output/alpine-dual-vpn.qcow2
+          images/alpine/output/overlay-dual-vpn.qcow2
+          images/alpine/output/meta/variant-dual-vpn-provenance.json
+        retention-days: 30
+
+  # ===========================================================================
+  # Create Combined Bundle
+  # ===========================================================================
+  bundle-variants:
+    name: Bundle All Variants
+    runs-on: ubuntu-latest
+    needs: [build-no-vpn, build-wireguard, build-tailscale, build-dual-vpn]
+    if: always() && (github.event.inputs.variant == 'all' || github.event.inputs.variant == '')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Download all variants
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts/
+    
+    - name: Create combined bundle
+      run: |
+        GIT_SHA=$(git rev-parse --short HEAD)
+        BUNDLE_NAME="infrasim-alpine-variants-${GIT_SHA}"
+        
+        mkdir -p bundle/{no-vpn,wireguard,tailscale,dual-vpn,meta}
+        
+        # Copy each variant
+        for variant in no-vpn wireguard tailscale dual-vpn; do
+          if [[ -d "artifacts/alpine-${variant}" ]]; then
+            cp artifacts/alpine-${variant}/*.qcow2 bundle/${variant}/ 2>/dev/null || true
+            cp artifacts/alpine-${variant}/*.json bundle/meta/ 2>/dev/null || true
+          fi
+        done
+        
+        # Create manifest
+        cat > bundle/manifest.json << EOF
+        {
+          "name": "infrasim-alpine-variants",
+          "version": "${GIT_SHA}",
+          "alpine_version": "${{ env.ALPINE_VERSION }}",
+          "build_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "variants": [
+            {
+              "name": "no-vpn",
+              "description": "Base Alpine without VPN",
+              "files": ["no-vpn/alpine-no-vpn.qcow2", "no-vpn/overlay-no-vpn.qcow2"]
+            },
+            {
+              "name": "wireguard",
+              "description": "Alpine with WireGuard mesh VPN",
+              "files": ["wireguard/alpine-wireguard.qcow2", "wireguard/overlay-wireguard.qcow2"]
+            },
+            {
+              "name": "tailscale",
+              "description": "Alpine with Tailscale control plane",
+              "files": ["tailscale/alpine-tailscale.qcow2", "tailscale/overlay-tailscale.qcow2"]
+            },
+            {
+              "name": "dual-vpn",
+              "description": "Alpine with WireGuard (data) + Tailscale (C2)",
+              "files": ["dual-vpn/alpine-dual-vpn.qcow2", "dual-vpn/overlay-dual-vpn.qcow2"]
+            }
+          ]
+        }
+        EOF
+        
+        # Create tarball
+        tar -czvf "${BUNDLE_NAME}.tar.gz" -C bundle .
+        sha256sum "${BUNDLE_NAME}.tar.gz" > "${BUNDLE_NAME}.tar.gz.sha256"
+    
+    - name: Upload combined bundle
+      uses: actions/upload-artifact@v4
+      with:
+        name: infrasim-alpine-variants-bundle
+        path: |
+          *.tar.gz
+          *.sha256
+        retention-days: 30
+    
+    - name: Create Release (on tag)
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          *.tar.gz
+          *.sha256
+        body: |
+          ## InfraSim Alpine Variants ${{ github.ref_name }}
+          
+          This release includes four Alpine Linux image variants:
+          
+          | Variant | Description |
+          |---------|-------------|
+          | `no-vpn` | Base Alpine without VPN software |
+          | `wireguard` | WireGuard mesh VPN for P2P networking |
+          | `tailscale` | Tailscale control plane (like Docker Swarm) |
+          | `dual-vpn` | WireGuard data plane + Tailscale C2 |
+          
+          ### Usage
+          ```bash
+          # Extract bundle
+          tar -xzf infrasim-alpine-variants-*.tar.gz
+          
+          # Use specific variant
+          qemu-system-aarch64 -M virt -m 512 \
+            -drive file=wireguard/alpine-wireguard.qcow2,if=virtio \
+            -nographic
+          ```
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ===========================================================================
+  # Cleanup Runners (optional)
+  # ===========================================================================
+  cleanup-runners:
+    name: Cleanup Runners
+    runs-on: ubuntu-latest
+    needs: [bundle-variants]
+    if: always() && github.event.inputs.use_self_hosted == 'true'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Cleanup ephemeral runners
+      run: |
+        # Only cleanup if explicitly requested via workflow input
+        if [[ "${{ github.event.inputs.cleanup_runners }}" == "true" ]]; then
+          cd examples/terraform/github-runners
+          terraform destroy -auto-approve \
+            -var="github_token=${{ secrets.RUNNER_REGISTRATION_TOKEN }}" \
+            -var="github_repo=${{ github.repository }}"
+        else
+          echo "Skipping runner cleanup (runners are persistent)"
+        fi
+      continue-on-error: true

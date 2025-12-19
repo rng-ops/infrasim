@@ -4,16 +4,25 @@
 //! - Dependency graph construction and cycle detection
 //! - Vendor convergence pattern detection
 //! - Confounding pattern identification
-//! - Network timing probes for routing inference
+//! - Optional network timing probes (feature-gated, opt-in)
+//!
+//! # Feature Flags
+//!
+//! - `network-context`: Enables optional network timing collection (OFF by default).
+//!   When enabled, timing probes are still opt-in and require explicit runtime enablement
+//!   via `NetworkTimingConfig`.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::net::{IpAddr, ToSocketAddrs};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(feature = "network-context")]
+use std::net::ToSocketAddrs;
+#[cfg(feature = "network-context")]
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tracing::{debug, info, warn};
 
@@ -83,13 +92,19 @@ pub enum EdgeKind {
     Proc,
 }
 
-/// Complete dependency graph
+/// Complete dependency graph with adjacency lists for O(1) lookups
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DependencyGraph {
     pub nodes: HashMap<String, DependencyNode>,
     pub edges: Vec<DependencyEdge>,
     pub root_nodes: Vec<String>,
     pub metadata: GraphMetadata,
+    /// Adjacency list: node_id -> list of outgoing edge targets
+    #[serde(skip)]
+    adjacency_out: HashMap<String, Vec<String>>,
+    /// Reverse adjacency: node_id -> list of incoming edge sources
+    #[serde(skip)]
+    adjacency_in: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -112,27 +127,76 @@ impl DependencyGraph {
         self.nodes.insert(node.id.clone(), node);
     }
 
-    /// Add an edge to the graph
+    /// Add an edge to the graph, updating adjacency lists
     pub fn add_edge(&mut self, edge: DependencyEdge) {
+        // Update adjacency lists for O(1) lookups
+        self.adjacency_out
+            .entry(edge.from.clone())
+            .or_default()
+            .push(edge.to.clone());
+        self.adjacency_in
+            .entry(edge.to.clone())
+            .or_default()
+            .push(edge.from.clone());
         self.edges.push(edge);
     }
 
-    /// Get all dependencies of a node
-    pub fn dependencies(&self, node_id: &str) -> Vec<&DependencyNode> {
-        self.edges
-            .iter()
-            .filter(|e| e.from == node_id)
-            .filter_map(|e| self.nodes.get(&e.to))
-            .collect()
+    /// Rebuild adjacency lists from edges (call after deserialization)
+    pub fn rebuild_adjacency(&mut self) {
+        self.adjacency_out.clear();
+        self.adjacency_in.clear();
+        for edge in &self.edges {
+            self.adjacency_out
+                .entry(edge.from.clone())
+                .or_default()
+                .push(edge.to.clone());
+            self.adjacency_in
+                .entry(edge.to.clone())
+                .or_default()
+                .push(edge.from.clone());
+        }
     }
 
-    /// Get all dependents of a node (reverse dependencies)
+    /// Get all dependencies of a node (O(1) lookup via adjacency list)
+    pub fn dependencies(&self, node_id: &str) -> Vec<&DependencyNode> {
+        self.adjacency_out
+            .get(node_id)
+            .map(|targets| {
+                targets
+                    .iter()
+                    .filter_map(|t| self.nodes.get(t))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get all dependents of a node (reverse dependencies, O(1) lookup)
     pub fn dependents(&self, node_id: &str) -> Vec<&DependencyNode> {
-        self.edges
-            .iter()
-            .filter(|e| e.to == node_id)
-            .filter_map(|e| self.nodes.get(&e.from))
-            .collect()
+        self.adjacency_in
+            .get(node_id)
+            .map(|sources| {
+                sources
+                    .iter()
+                    .filter_map(|s| self.nodes.get(s))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get outgoing neighbor IDs efficiently
+    pub fn outgoing_neighbors(&self, node_id: &str) -> &[String] {
+        self.adjacency_out
+            .get(node_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Get incoming neighbor IDs efficiently  
+    pub fn incoming_neighbors(&self, node_id: &str) -> &[String] {
+        self.adjacency_in
+            .get(node_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     /// Compute graph statistics
@@ -167,10 +231,9 @@ impl DependencyGraph {
             }
             max_depth = max_depth.max(depth);
 
-            for edge in &self.edges {
-                if edge.from == node {
-                    queue.push_back((edge.to.clone(), depth + 1));
-                }
+            // Use adjacency list for O(1) neighbor lookup
+            for neighbor in self.outgoing_neighbors(&node) {
+                queue.push_back((neighbor.clone(), depth + 1));
             }
         }
 
@@ -265,64 +328,100 @@ pub enum Severity {
 }
 
 // ============================================================================
-// Network Timing Probes
+// Network Timing Probes (Feature-gated, Opt-in)
 // ============================================================================
 
-/// Time servers for ICMP probing
-pub const STRATUM_1_SERVERS: &[(&str, &str)] = &[
-    ("time.google.com", "Google"),
-    ("time.cloudflare.com", "Cloudflare"),
-    ("time.apple.com", "Apple"),
-    ("time.windows.com", "Microsoft"),
-    ("time.nist.gov", "NIST"),
-    ("pool.ntp.org", "NTP Pool"),
-    ("time.aws.com", "AWS"),
-    ("time.facebook.com", "Meta"),
-];
+/// Configuration for optional network timing collection.
+/// 
+/// Network timing is:
+/// - Feature-gated: requires `network-context` Cargo feature
+/// - Opt-in: requires explicit runtime enablement via this config
+/// - Privacy-respecting: no hardcoded servers, user provides targets
+/// - Coarse-grained: collects only aggregated RTT statistics
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NetworkTimingConfig {
+    /// Whether network timing is enabled (default: false)
+    pub enabled: bool,
+    /// Custom probe targets (host, label pairs)
+    /// If empty and enabled, no probes are performed
+    pub probe_targets: Vec<ProbeTarget>,
+    /// Maximum number of probes to perform
+    pub max_probes: usize,
+    /// Timeout per probe in milliseconds
+    pub timeout_ms: u64,
+}
 
-/// Geographic reference servers for triangulation
-pub const GEO_REFERENCE_SERVERS: &[(&str, &str, &str)] = &[
-    ("ping.online.net", "EU", "Paris"),
-    ("speedtest.tele2.net", "EU", "Amsterdam"),
-    ("mirror.leaseweb.com", "EU", "Frankfurt"),
-    ("mirror.hetzner.com", "EU", "Nuremberg"),
-    ("ping.vultr.com", "US-WEST", "Los Angeles"),
-    ("speedtest.sjc.linode.com", "US-WEST", "San Jose"),
-    ("speedtest.atlanta.linode.com", "US-EAST", "Atlanta"),
-    ("speedtest.newark.linode.com", "US-EAST", "Newark"),
-    ("speedtest.singapore.linode.com", "APAC", "Singapore"),
-    ("speedtest.tokyo2.linode.com", "APAC", "Tokyo"),
-];
+/// A custom probe target
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProbeTarget {
+    pub host: String,
+    pub label: String,
+}
+
+impl NetworkTimingConfig {
+    /// Create a disabled configuration (default)
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            probe_targets: Vec::new(),
+            max_probes: 10,
+            timeout_ms: 2000,
+        }
+    }
+
+    /// Create an enabled configuration with custom targets
+    pub fn with_targets(targets: Vec<ProbeTarget>) -> Self {
+        Self {
+            enabled: true,
+            probe_targets: targets,
+            max_probes: 10,
+            timeout_ms: 2000,
+        }
+    }
+}
 
 /// Result of a timing probe
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimingProbe {
     pub target: String,
     pub target_ip: Option<String>,
-    pub region: Option<String>,
     pub label: String,
     pub timestamp: u64,
     pub rtt_ms: Option<f64>,
     pub ttl: Option<u8>,
-    pub hops_estimate: Option<u8>,
     pub success: bool,
     pub error: Option<String>,
 }
 
-/// Collected timing data for BGP inference
+/// Aggregated timing statistics (coarse-grained, privacy-respecting)
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AggregatedTimingStats {
+    pub total_probes: usize,
+    pub successful_probes: usize,
+    pub min_rtt_ms: Option<f64>,
+    pub max_rtt_ms: Option<f64>,
+    pub avg_rtt_ms: Option<f64>,
+    pub collection_timestamp: u64,
+}
+
+/// Collected timing data (no geographic inference)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NetworkFingerprint {
     pub probes: Vec<TimingProbe>,
     pub collection_start: u64,
     pub collection_end: u64,
-    pub source_ip: Option<String>,
-    pub inferred_region: Option<String>,
-    pub routing_anomalies: Vec<String>,
+    pub aggregated_stats: AggregatedTimingStats,
 }
 
+#[cfg(feature = "network-context")]
 impl NetworkFingerprint {
-    /// Perform ICMP timing probes to strategic servers
-    pub fn collect() -> Self {
+    /// Collect network timing probes using provided configuration.
+    /// Returns None if timing is disabled or no targets configured.
+    pub fn collect(config: &NetworkTimingConfig) -> Option<Self> {
+        if !config.enabled || config.probe_targets.is_empty() {
+            return None;
+        }
+
         let mut fingerprint = NetworkFingerprint {
             collection_start: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -331,16 +430,13 @@ impl NetworkFingerprint {
             ..Default::default()
         };
 
-        // Probe time servers
-        for (host, label) in STRATUM_1_SERVERS {
-            let probe = ping_host(host, label, None);
-            fingerprint.probes.push(probe);
-        }
+        let targets_to_probe = config
+            .probe_targets
+            .iter()
+            .take(config.max_probes);
 
-        // Probe geographic references
-        for (host, region, city) in GEO_REFERENCE_SERVERS {
-            let label = format!("{} ({})", city, region);
-            let probe = ping_host(host, &label, Some(region.to_string()));
+        for target in targets_to_probe {
+            let probe = ping_host(&target.host, &target.label, config.timeout_ms);
             fingerprint.probes.push(probe);
         }
 
@@ -349,76 +445,46 @@ impl NetworkFingerprint {
             .unwrap_or_default()
             .as_secs();
 
-        // Infer region based on lowest RTT
-        fingerprint.infer_region();
-        fingerprint.detect_anomalies();
+        // Compute coarse aggregated stats only
+        fingerprint.compute_aggregated_stats();
 
-        fingerprint
+        Some(fingerprint)
     }
 
-    fn infer_region(&mut self) {
-        let mut region_rtts: HashMap<String, Vec<f64>> = HashMap::new();
+    fn compute_aggregated_stats(&mut self) {
+        let successful_rtts: Vec<f64> = self
+            .probes
+            .iter()
+            .filter(|p| p.success)
+            .filter_map(|p| p.rtt_ms)
+            .collect();
 
-        for probe in &self.probes {
-            if let (Some(region), Some(rtt)) = (&probe.region, probe.rtt_ms) {
-                region_rtts.entry(region.clone()).or_default().push(rtt);
-            }
-        }
-
-        // Find region with lowest average RTT
-        let mut best_region = None;
-        let mut best_avg = f64::MAX;
-
-        for (region, rtts) in &region_rtts {
-            if !rtts.is_empty() {
-                let avg: f64 = rtts.iter().sum::<f64>() / rtts.len() as f64;
-                if avg < best_avg {
-                    best_avg = avg;
-                    best_region = Some(region.clone());
-                }
-            }
-        }
-
-        self.inferred_region = best_region;
+        self.aggregated_stats = AggregatedTimingStats {
+            total_probes: self.probes.len(),
+            successful_probes: successful_rtts.len(),
+            min_rtt_ms: successful_rtts.iter().cloned().reduce(f64::min),
+            max_rtt_ms: successful_rtts.iter().cloned().reduce(f64::max),
+            avg_rtt_ms: if successful_rtts.is_empty() {
+                None
+            } else {
+                Some(successful_rtts.iter().sum::<f64>() / successful_rtts.len() as f64)
+            },
+            collection_timestamp: self.collection_start,
+        };
     }
+}
 
-    fn detect_anomalies(&mut self) {
-        // Detect asymmetric routing (large RTT variance to nearby regions)
-        let mut region_stats: HashMap<String, (f64, f64)> = HashMap::new(); // (min, max)
-
-        for probe in &self.probes {
-            if let (Some(region), Some(rtt)) = (&probe.region, probe.rtt_ms) {
-                let entry = region_stats.entry(region.clone()).or_insert((f64::MAX, 0.0));
-                entry.0 = entry.0.min(rtt);
-                entry.1 = entry.1.max(rtt);
-            }
-        }
-
-        for (region, (min, max)) in &region_stats {
-            let variance = max - min;
-            if variance > 50.0 && *min > 0.0 {
-                self.routing_anomalies.push(format!(
-                    "High RTT variance to {}: {:.1}ms - {:.1}ms (diff: {:.1}ms)",
-                    region, min, max, variance
-                ));
-            }
-        }
-
-        // Detect unusually high TTL differences
-        let ttls: Vec<u8> = self.probes.iter().filter_map(|p| p.ttl).collect();
-        if let (Some(min_ttl), Some(max_ttl)) = (ttls.iter().min(), ttls.iter().max()) {
-            if max_ttl - min_ttl > 20 {
-                self.routing_anomalies.push(format!(
-                    "Large TTL variance: {} - {} (suggests diverse routing paths)",
-                    min_ttl, max_ttl
-                ));
-            }
-        }
+#[cfg(not(feature = "network-context"))]
+impl NetworkFingerprint {
+    /// Network timing is disabled when feature is not enabled
+    pub fn collect(_config: &NetworkTimingConfig) -> Option<Self> {
+        None
     }
 }
 
 /// Ping a host and record timing
-fn ping_host(host: &str, label: &str, region: Option<String>) -> TimingProbe {
+#[cfg(feature = "network-context")]
+fn ping_host(host: &str, label: &str, timeout_ms: u64) -> TimingProbe {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -431,15 +497,15 @@ fn ping_host(host: &str, label: &str, region: Option<String>) -> TimingProbe {
         .and_then(|mut addrs| addrs.next())
         .map(|addr| addr.ip().to_string());
 
-    // Execute ping (macOS compatible)
-    let start = Instant::now();
+    let timeout_secs = (timeout_ms / 1000).max(1);
+
+    // Execute ping (macOS/Linux compatible)
     let output = Command::new("ping")
-        .args(["-c", "1", "-W", "2", host])
+        .args(["-c", "1", "-W", &timeout_secs.to_string(), host])
         .output();
 
     match output {
         Ok(out) => {
-            let elapsed = start.elapsed();
             let stdout = String::from_utf8_lossy(&out.stdout);
 
             // Parse RTT from ping output
@@ -449,12 +515,10 @@ fn ping_host(host: &str, label: &str, region: Option<String>) -> TimingProbe {
             TimingProbe {
                 target: host.to_string(),
                 target_ip,
-                region,
                 label: label.to_string(),
                 timestamp,
                 rtt_ms,
                 ttl,
-                hops_estimate: ttl.map(|t| estimate_hops(t)),
                 success: out.status.success(),
                 error: if out.status.success() {
                     None
@@ -466,18 +530,17 @@ fn ping_host(host: &str, label: &str, region: Option<String>) -> TimingProbe {
         Err(e) => TimingProbe {
             target: host.to_string(),
             target_ip,
-            region,
             label: label.to_string(),
             timestamp,
             rtt_ms: None,
             ttl: None,
-            hops_estimate: None,
             success: false,
             error: Some(e.to_string()),
         },
     }
 }
 
+#[cfg(feature = "network-context")]
 fn parse_ping_rtt(output: &str) -> Option<f64> {
     // macOS: "round-trip min/avg/max/stddev = 1.234/2.345/3.456/0.123 ms"
     // Linux: "rtt min/avg/max/mdev = 1.234/2.345/3.456/0.123 ms"
@@ -503,6 +566,7 @@ fn parse_ping_rtt(output: &str) -> Option<f64> {
     None
 }
 
+#[cfg(feature = "network-context")]
 fn parse_ping_ttl(output: &str) -> Option<u8> {
     for line in output.lines() {
         if line.contains("ttl=") || line.contains("TTL=") {
@@ -515,17 +579,6 @@ fn parse_ping_ttl(output: &str) -> Option<u8> {
         }
     }
     None
-}
-
-fn estimate_hops(ttl: u8) -> u8 {
-    // Common initial TTLs: 64 (Linux/macOS), 128 (Windows), 255 (Solaris/Cisco)
-    if ttl > 128 {
-        255 - ttl
-    } else if ttl > 64 {
-        128 - ttl
-    } else {
-        64 - ttl
-    }
 }
 
 // ============================================================================
@@ -585,11 +638,33 @@ impl PipelineAnalyzer {
             .as_array()
             .ok_or_else(|| AnalysisError::Parse("No packages in metadata".to_string()))?;
 
+        // Build a map of package IDs to their proc-macro status (from targets)
+        let mut proc_macro_packages: HashSet<String> = HashSet::new();
+
         // Build nodes
         for pkg in packages {
             let id = pkg["id"].as_str().unwrap_or("").to_string();
             let name = pkg["name"].as_str().unwrap_or("").to_string();
             let version = pkg["version"].as_str().map(|s| s.to_string());
+
+            // Check if this package is a proc-macro by examining its targets
+            let is_proc_macro = pkg["targets"]
+                .as_array()
+                .map(|targets| {
+                    targets.iter().any(|target| {
+                        target["kind"]
+                            .as_array()
+                            .map(|kinds| {
+                                kinds.iter().any(|k| k.as_str() == Some("proc-macro"))
+                            })
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false);
+
+            if is_proc_macro {
+                proc_macro_packages.insert(id.clone());
+            }
 
             let source = if let Some(source_str) = pkg["source"].as_str() {
                 if source_str.starts_with("registry+") {
@@ -617,13 +692,18 @@ impl PipelineAnalyzer {
                 }
             };
 
+            let mut node_metadata = HashMap::new();
+            if is_proc_macro {
+                node_metadata.insert("proc_macro".to_string(), "true".to_string());
+            }
+
             let node = DependencyNode {
                 id: id.clone(),
                 name,
                 version,
                 source,
                 checksum: None,
-                metadata: HashMap::new(),
+                metadata: node_metadata,
             };
 
             self.graph.add_node(node);
@@ -638,6 +718,10 @@ impl PipelineAnalyzer {
                     if let Some(deps) = node["deps"].as_array() {
                         for dep in deps {
                             let to = dep["pkg"].as_str().unwrap_or("").to_string();
+
+                            // Determine edge kind from dep_kinds, with proc-macro detection
+                            let is_target_proc_macro = proc_macro_packages.contains(&to);
+
                             let kinds: Vec<EdgeKind> = dep["dep_kinds"]
                                 .as_array()
                                 .map(|arr| {
@@ -646,12 +730,19 @@ impl PipelineAnalyzer {
                                             k["kind"].as_str().map(|s| match s {
                                                 "dev" => EdgeKind::Dev,
                                                 "build" => EdgeKind::Build,
+                                                _ if is_target_proc_macro => EdgeKind::Proc,
                                                 _ => EdgeKind::Normal,
                                             })
                                         })
                                         .collect()
                                 })
-                                .unwrap_or_else(|| vec![EdgeKind::Normal]);
+                                .unwrap_or_else(|| {
+                                    if is_target_proc_macro {
+                                        vec![EdgeKind::Proc]
+                                    } else {
+                                        vec![EdgeKind::Normal]
+                                    }
+                                });
 
                             for kind in kinds {
                                 self.graph.add_edge(DependencyEdge {
@@ -680,10 +771,19 @@ impl PipelineAnalyzer {
         let mut visited = HashSet::new();
         let mut rec_stack = HashSet::new();
         let mut path = Vec::new();
+        // Track seen cycles to avoid duplicates (normalized to start from min element)
+        let mut seen_cycles: HashSet<Vec<String>> = HashSet::new();
 
         for node_id in self.graph.nodes.keys() {
             if !visited.contains(node_id) {
-                self.dfs_cycle(node_id, &mut visited, &mut rec_stack, &mut path, report);
+                self.dfs_cycle(
+                    node_id,
+                    &mut visited,
+                    &mut rec_stack,
+                    &mut path,
+                    &mut seen_cycles,
+                    report,
+                );
             }
         }
     }
@@ -694,21 +794,27 @@ impl PipelineAnalyzer {
         visited: &mut HashSet<String>,
         rec_stack: &mut HashSet<String>,
         path: &mut Vec<String>,
+        seen_cycles: &mut HashSet<Vec<String>>,
         report: &mut AnalysisReport,
     ) {
         visited.insert(node.to_string());
         rec_stack.insert(node.to_string());
         path.push(node.to_string());
 
-        for edge in &self.graph.edges {
-            if edge.from == node {
-                if !visited.contains(&edge.to) {
-                    self.dfs_cycle(&edge.to, visited, rec_stack, path, report);
-                } else if rec_stack.contains(&edge.to) {
-                    // Found cycle
-                    let cycle_start = path.iter().position(|n| n == &edge.to).unwrap_or(0);
-                    let cycle_nodes: Vec<String> = path[cycle_start..].to_vec();
+        // Use adjacency list for O(1) neighbor lookup
+        for neighbor in self.graph.outgoing_neighbors(node) {
+            if !visited.contains(neighbor) {
+                self.dfs_cycle(neighbor, visited, rec_stack, path, seen_cycles, report);
+            } else if rec_stack.contains(neighbor) {
+                // Found cycle - extract and normalize it
+                let cycle_start = path.iter().position(|n| n == neighbor).unwrap_or(0);
+                let cycle_nodes: Vec<String> = path[cycle_start..].to_vec();
 
+                // Normalize cycle: rotate to start from lexicographically smallest element
+                let normalized =    normalize_cycle(&cycle_nodes);
+
+                // Only add if we haven't seen this cycle before
+                if seen_cycles.insert(normalized) {
                     let cycle = CycleInfo {
                         nodes: cycle_nodes.clone(),
                         kind: if cycle_nodes.len() == 2 {
@@ -724,7 +830,7 @@ impl PipelineAnalyzer {
                         description: format!(
                             "Cycle detected: {} → {}",
                             cycle_nodes.join(" → "),
-                            edge.to
+                            neighbor
                         ),
                     };
 
@@ -833,10 +939,11 @@ impl PipelineAnalyzer {
             }
 
             if visited.insert(current.clone()) {
-                for edge in &self.graph.edges {
-                    if &edge.from == current && !visited.contains(&edge.to) {
+                // Use adjacency list for O(1) neighbor lookup
+                for neighbor in self.graph.outgoing_neighbors(current) {
+                    if !visited.contains(neighbor) {
                         let mut new_path = path.clone();
-                        new_path.push(edge.to.clone());
+                        new_path.push(neighbor.clone());
                         queue.push_back(new_path);
                     }
                 }
@@ -1004,6 +1111,29 @@ impl Default for PipelineAnalyzer {
 // Utility Functions
 // ============================================================================
 
+/// Normalize a cycle by rotating it to start from the lexicographically smallest element.
+/// This ensures that A -> B -> C -> A and B -> C -> A -> B are detected as the same cycle.
+fn normalize_cycle(cycle: &[String]) -> Vec<String> {
+    if cycle.is_empty() {
+        return Vec::new();
+    }
+
+    // Find the index of the lexicographically smallest element
+    let min_idx = cycle
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| a.cmp(b))
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+
+    // Rotate the cycle to start from the smallest element
+    let mut normalized = Vec::with_capacity(cycle.len());
+    normalized.extend_from_slice(&cycle[min_idx..]);
+    normalized.extend_from_slice(&cycle[..min_idx]);
+
+    normalized
+}
+
 fn extract_github_org(url: &str) -> Option<String> {
     // Extract org from URLs like "https://github.com/org/repo" or "git+https://..."
     let url = url.trim_start_matches("git+");
@@ -1082,12 +1212,101 @@ mod tests {
     }
 
     #[test]
-    fn test_estimate_hops() {
-        assert_eq!(estimate_hops(64), 0); // Same machine
-        assert_eq!(estimate_hops(63), 1); // 1 hop
-        assert_eq!(estimate_hops(55), 9); // 9 hops
-        assert_eq!(estimate_hops(128), 0); // Windows same machine
-        assert_eq!(estimate_hops(120), 8); // 8 hops from Windows
+    fn test_normalize_cycle() {
+        // Cycle A -> B -> C should normalize to A -> B -> C (A is smallest)
+        let cycle = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        assert_eq!(normalize_cycle(&cycle), vec!["a", "b", "c"]);
+
+        // Cycle C -> A -> B should normalize to A -> B -> C
+        let cycle2 = vec!["c".to_string(), "a".to_string(), "b".to_string()];
+        assert_eq!(normalize_cycle(&cycle2), vec!["a", "b", "c"]);
+
+        // Cycle B -> C -> A should normalize to A -> B -> C
+        let cycle3 = vec!["b".to_string(), "c".to_string(), "a".to_string()];
+        assert_eq!(normalize_cycle(&cycle3), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_adjacency_lists() {
+        let mut graph = DependencyGraph::new();
+
+        graph.add_node(DependencyNode {
+            id: "a".to_string(),
+            name: "a".to_string(),
+            version: None,
+            source: DependencySource::Unknown,
+            checksum: None,
+            metadata: HashMap::new(),
+        });
+        graph.add_node(DependencyNode {
+            id: "b".to_string(),
+            name: "b".to_string(),
+            version: None,
+            source: DependencySource::Unknown,
+            checksum: None,
+            metadata: HashMap::new(),
+        });
+        graph.add_node(DependencyNode {
+            id: "c".to_string(),
+            name: "c".to_string(),
+            version: None,
+            source: DependencySource::Unknown,
+            checksum: None,
+            metadata: HashMap::new(),
+        });
+
+        graph.add_edge(DependencyEdge {
+            from: "a".to_string(),
+            to: "b".to_string(),
+            kind: EdgeKind::Normal,
+            optional: false,
+            features: vec![],
+        });
+        graph.add_edge(DependencyEdge {
+            from: "a".to_string(),
+            to: "c".to_string(),
+            kind: EdgeKind::Normal,
+            optional: false,
+            features: vec![],
+        });
+
+        // Test outgoing neighbors
+        let neighbors = graph.outgoing_neighbors("a");
+        assert_eq!(neighbors.len(), 2);
+        assert!(neighbors.contains(&"b".to_string()));
+        assert!(neighbors.contains(&"c".to_string()));
+
+        // Test incoming neighbors
+        let incoming = graph.incoming_neighbors("b");
+        assert_eq!(incoming.len(), 1);
+        assert!(incoming.contains(&"a".to_string()));
+
+        // Test dependencies method
+        let deps = graph.dependencies("a");
+        assert_eq!(deps.len(), 2);
+
+        // Test dependents method
+        let dependents = graph.dependents("b");
+        assert_eq!(dependents.len(), 1);
+        assert_eq!(dependents[0].id, "a");
+    }
+
+    #[test]
+    fn test_network_timing_config() {
+        // Disabled by default
+        let config = NetworkTimingConfig::disabled();
+        assert!(!config.enabled);
+        assert!(config.probe_targets.is_empty());
+
+        // With custom targets
+        let config = NetworkTimingConfig::with_targets(vec![
+            ProbeTarget {
+                host: "example.com".to_string(),
+                label: "Example".to_string(),
+            },
+        ]);
+        assert!(config.enabled);
+        assert_eq!(config.probe_targets.len(), 1);
     }
 
     #[test]

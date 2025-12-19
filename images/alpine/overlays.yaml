@@ -1,0 +1,402 @@
+# InfraSim Alpine Image Overlay Definitions
+# ==========================================
+#
+# This file defines qcow2 overlay configurations for the four Alpine variants.
+# Overlays allow efficient storage and delta-based updates from a shared base image.
+#
+# Usage:
+#   infrasim image overlay create --config overlays.yaml --variant wireguard
+#   infrasim image overlay apply --base base.qcow2 --overlay overlay-wireguard.qcow2
+
+# Schema version
+version: "1.0"
+
+# Base image configuration
+base_image:
+  name: alpine-base
+  file: base.qcow2
+  format: qcow2
+  size: 2G
+  arch: aarch64
+  alpine_version: "3.20"
+  description: "Minimal Alpine Linux base image for InfraSim"
+
+# Overlay chain
+overlays:
+  # ===========================================================================
+  # no-vpn Overlay
+  # ===========================================================================
+  - name: overlay-no-vpn
+    file: overlay-no-vpn.qcow2
+    format: qcow2
+    backing_file: base.qcow2
+    backing_format: qcow2
+    compression: zstd
+    description: "Base Alpine without VPN software"
+    
+    # Delta from base
+    changes:
+      packages_added: []
+      packages_removed: []
+      services_enabled:
+        - sshd
+        - dhcpcd
+        - chronyd
+      services_disabled: []
+      
+    # Files modified/added in this overlay
+    files:
+      - path: /etc/infrasim/variant
+        content: "no-vpn"
+      - path: /etc/motd
+        content: |
+          Welcome to InfraSim Alpine (no-vpn)
+          =====================================
+          This is a base Alpine image without VPN software.
+          Suitable for isolated/air-gapped environments.
+          
+    # Network configuration
+    network:
+      interfaces:
+        - name: eth0
+          type: dhcp
+      firewall:
+        enabled: true
+        default_policy: drop
+        
+    # Metadata for provenance
+    metadata:
+      use_case: "Air-gapped environments, isolated networks"
+      security_level: "standard"
+      vpn_stack: "none"
+
+  # ===========================================================================
+  # wireguard Overlay
+  # ===========================================================================
+  - name: overlay-wireguard
+    file: overlay-wireguard.qcow2
+    format: qcow2
+    backing_file: base.qcow2
+    backing_format: qcow2
+    compression: zstd
+    description: "Alpine with WireGuard mesh VPN"
+    
+    changes:
+      packages_added:
+        - wireguard-tools
+        - wireguard-lts
+        - avahi
+        - avahi-tools
+        - libqrencode
+      packages_removed: []
+      services_enabled:
+        - sshd
+        - dhcpcd
+        - chronyd
+        - wireguard
+        - avahi-daemon
+      services_disabled:
+        - tailscale
+        
+    files:
+      - path: /etc/infrasim/variant
+        content: "wireguard"
+      - path: /etc/wireguard/.keep
+        content: ""
+      - path: /opt/infrasim/wireguard/peer-discovery.sh
+        mode: "0755"
+        source: variants/wireguard/peer-discovery.sh
+      - path: /etc/motd
+        content: |
+          Welcome to InfraSim Alpine (wireguard)
+          =======================================
+          WireGuard mesh VPN is configured.
+          
+          Commands:
+            wg show           - Show WireGuard status
+            wg-quick up wg0   - Bring up VPN
+            wg-quick down wg0 - Bring down VPN
+          
+    network:
+      interfaces:
+        - name: eth0
+          type: dhcp
+        - name: wg0
+          type: wireguard
+          config:
+            listen_port: 51820
+            mtu: 1420
+      firewall:
+        enabled: true
+        default_policy: drop
+        rules:
+          - port: 51820
+            protocol: udp
+            action: accept
+            comment: "WireGuard"
+            
+    metadata:
+      use_case: "Peer-to-peer encrypted mesh, high-performance VPN"
+      security_level: "high"
+      vpn_stack: "wireguard"
+
+  # ===========================================================================
+  # tailscale Overlay
+  # ===========================================================================
+  - name: overlay-tailscale
+    file: overlay-tailscale.qcow2
+    format: qcow2
+    backing_file: base.qcow2
+    backing_format: qcow2
+    compression: zstd
+    description: "Alpine with Tailscale control plane"
+    
+    changes:
+      packages_added:
+        - tailscale
+        - tailscale-openrc
+        - curl
+        - jq
+      packages_removed: []
+      services_enabled:
+        - sshd
+        - dhcpcd
+        - chronyd
+        - tailscaled
+      services_disabled:
+        - wireguard
+        
+    files:
+      - path: /etc/infrasim/variant
+        content: "tailscale"
+      - path: /var/lib/tailscale/.keep
+        content: ""
+      - path: /opt/infrasim/tailscale/tailscale-up.sh
+        mode: "0755"
+        source: variants/tailscale/tailscale-up.sh
+      - path: /etc/infrasim/tailscale/config.json
+        mode: "0600"
+        content: |
+          {
+            "advertise_exit_node": false,
+            "accept_dns": true,
+            "accept_routes": true,
+            "ssh": true,
+            "tags": ["tag:infrasim", "tag:alpine"]
+          }
+      - path: /etc/motd
+        content: |
+          Welcome to InfraSim Alpine (tailscale)
+          =======================================
+          Tailscale control plane is configured.
+          
+          Commands:
+            tailscale status  - Show connection status
+            tailscale up      - Connect to Tailscale
+            tailscale down    - Disconnect
+            tailscale ip      - Show Tailscale IP
+          
+    network:
+      interfaces:
+        - name: eth0
+          type: dhcp
+        - name: tailscale0
+          type: tailscale
+          # Managed by tailscaled
+      firewall:
+        enabled: true
+        default_policy: drop
+        rules:
+          - port: 41641
+            protocol: udp
+            action: accept
+            comment: "Tailscale"
+            
+    metadata:
+      use_case: "Centralized control plane, telemetry, node management"
+      security_level: "high"
+      vpn_stack: "tailscale"
+      # Like Docker Swarm telemetry
+      telemetry_enabled: true
+
+  # ===========================================================================
+  # dual-vpn Overlay
+  # ===========================================================================
+  - name: overlay-dual-vpn
+    file: overlay-dual-vpn.qcow2
+    format: qcow2
+    backing_file: base.qcow2
+    backing_format: qcow2
+    compression: zstd
+    description: "Alpine with WireGuard (data) + Tailscale (C2)"
+    
+    changes:
+      packages_added:
+        - wireguard-tools
+        - wireguard-lts
+        - avahi
+        - avahi-tools
+        - libqrencode
+        - tailscale
+        - tailscale-openrc
+        - nftables
+        - curl
+        - jq
+      packages_removed: []
+      services_enabled:
+        - sshd
+        - dhcpcd
+        - chronyd
+        - tailscaled
+        - wireguard
+        - avahi-daemon
+        - nftables
+      services_disabled: []
+        
+    files:
+      - path: /etc/infrasim/variant
+        content: "dual-vpn"
+      - path: /etc/wireguard/.keep
+        content: ""
+      - path: /var/lib/tailscale/.keep
+        content: ""
+      - path: /opt/infrasim/wireguard/peer-discovery.sh
+        mode: "0755"
+        source: variants/wireguard/peer-discovery.sh
+      - path: /opt/infrasim/tailscale/tailscale-up.sh
+        mode: "0755"
+        source: variants/tailscale/tailscale-up.sh
+      - path: /opt/infrasim/network/policy-routing.sh
+        mode: "0755"
+        source: variants/dual-vpn/policy-routing.sh
+      - path: /etc/infrasim/network/isolation.json
+        mode: "0644"
+        content: |
+          {
+            "control_plane": {
+              "interface": "tailscale0",
+              "mark": "0x100",
+              "table": 100
+            },
+            "data_plane": {
+              "interface": "wg0",
+              "mark": "0x200",
+              "table": 200
+            },
+            "isolation_enabled": true
+          }
+      - path: /etc/motd
+        content: |
+          Welcome to InfraSim Alpine (dual-vpn)
+          =======================================
+          Dual VPN stack configured:
+            - Tailscale: Control plane (C2, telemetry)
+            - WireGuard: Data plane (VM traffic)
+          
+          Traffic is isolated between VPN interfaces.
+          
+          Commands:
+            tailscale status   - C2 connection status
+            wg show            - Data plane status
+            ip rule list       - Policy routing
+          
+    network:
+      interfaces:
+        - name: eth0
+          type: dhcp
+          description: "Physical network"
+        - name: wg0
+          type: wireguard
+          description: "Data plane VPN"
+          config:
+            listen_port: 51820
+            mtu: 1420
+        - name: tailscale0
+          type: tailscale
+          description: "Control plane"
+      
+      # Policy-based routing
+      routing:
+        tables:
+          - id: 100
+            name: control_plane
+            interface: tailscale0
+          - id: 200
+            name: data_plane
+            interface: wg0
+        rules:
+          - fwmark: "0x100"
+            table: 100
+            priority: 100
+          - fwmark: "0x200"
+            table: 200
+            priority: 200
+            
+      firewall:
+        enabled: true
+        default_policy: drop
+        rules:
+          - port: 51820
+            protocol: udp
+            action: accept
+            comment: "WireGuard"
+          - port: 41641
+            protocol: udp
+            action: accept
+            comment: "Tailscale"
+          # Isolation rules
+          - interface_in: wg0
+            interface_out: tailscale0
+            action: drop
+            comment: "Isolate data from control"
+          - interface_in: tailscale0
+            interface_out: wg0
+            action: drop
+            comment: "Isolate control from data"
+            
+    metadata:
+      use_case: "Hostile territory, multi-layer security, compliance"
+      security_level: "maximum"
+      vpn_stack: "wireguard+tailscale"
+      traffic_isolation: true
+      # Control plane separate from data plane
+      control_plane: "tailscale"
+      data_plane: "wireguard"
+
+# Overlay chain for incremental builds
+# (Alternative: each variant can also stack on previous)
+chains:
+  # Stack variants on base
+  standard:
+    - base.qcow2
+    - overlay-no-vpn.qcow2
+    
+  wireguard:
+    - base.qcow2
+    - overlay-wireguard.qcow2
+    
+  tailscale:
+    - base.qcow2
+    - overlay-tailscale.qcow2
+    
+  dual-vpn:
+    - base.qcow2
+    - overlay-dual-vpn.qcow2
+
+# Build matrix for CI
+build_matrix:
+  - variant: no-vpn
+    runner: infrasim-runner-no-vpn
+    depends_on: []
+    
+  - variant: wireguard
+    runner: infrasim-runner-wireguard
+    depends_on: []
+    
+  - variant: tailscale
+    runner: infrasim-runner-tailscale
+    depends_on: []
+    
+  - variant: dual-vpn
+    runner: infrasim-runner-dual-vpn
+    depends_on: []

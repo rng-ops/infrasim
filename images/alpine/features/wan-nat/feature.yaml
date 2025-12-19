@@ -1,0 +1,82 @@
+  # WAN NAT Feature Overlay
+# Provides NAT traversal for WAN connectivity
+
+name: wan-nat
+version: 1.0.0
+description: >
+  NAT traversal overlay for WAN connectivity. Provides STUN/TURN client
+  support and NAT type detection for optimal peer connectivity through
+  various NAT topologies.
+
+requires:
+  - base-minimal
+
+conflicts: []
+
+packages:
+  - stun-client
+  - curl
+
+services_enable: []
+
+files:
+  - source: files/nat-detect.sh
+    destination: /usr/local/bin/nat-detect.sh
+    mode: "0755"
+  - source: files/stun-probe.sh
+    destination: /usr/local/bin/stun-probe.sh
+    mode: "0755"
+  - source: files/nat.conf
+    destination: /etc/infrasim/nat.conf
+    mode: "0644"
+
+firewall_fragment: |
+  table inet nat {
+    chain postrouting {
+      # Masquerade for outgoing WAN traffic
+      oifname "eth0" masquerade comment "WAN NAT masquerade"
+    }
+  }
+  
+  table inet filter {
+    chain input {
+      # Allow established connections (required for NAT traversal)
+      ct state established,related accept
+    }
+  }
+
+config_schema:
+  type: object
+  properties:
+    stun_servers:
+      type: array
+      items:
+        type: string
+      default:
+        - "stun.cloudflare.com:3478"
+        - "stun.l.google.com:19302"
+      description: STUN servers for NAT detection
+    turn_server:
+      type: string
+      default: ""
+      description: TURN server for relay (if direct fails)
+    turn_username:
+      type: string
+      default: ""
+      description: TURN username
+    turn_credential:
+      type: string
+      default: ""
+      description: TURN credential/password
+    upnp_enabled:
+      type: boolean
+      default: false
+      description: Enable UPnP port mapping (security risk)
+    nat_pmp_enabled:
+      type: boolean
+      default: false
+      description: Enable NAT-PMP port mapping
+
+selftest:
+  - test_stun_reachable
+  - test_nat_type_detected

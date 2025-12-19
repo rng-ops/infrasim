@@ -1,0 +1,68 @@
+# WAN NAT64 Feature Overlay
+# Provides NAT64 translation for IPv6-only networks
+
+name: wan-nat64
+version: 1.0.0
+description: >
+  NAT64 translation support for IPv6-only networks to reach IPv4
+  destinations. Uses Jool or Tayga for translation.
+
+requires:
+  - base-minimal
+
+conflicts: []
+
+packages:
+  - tayga
+  - radvd
+
+services_enable:
+  - tayga
+
+files:
+  - source: files/tayga.conf
+    destination: /etc/tayga.conf
+    mode: "0644"
+  - source: files/nat64-setup.sh
+    destination: /usr/local/bin/nat64-setup.sh
+    mode: "0755"
+
+firewall_fragment: |
+  table inet filter {
+    chain forward {
+      # Allow NAT64 translation
+      iifname "nat64" accept comment "NAT64 to IPv4"
+      oifname "nat64" accept comment "NAT64 from IPv6"
+    }
+  }
+  
+  table inet nat {
+    chain postrouting {
+      # Masquerade translated traffic
+      oifname "eth0" ip saddr 192.168.255.0/24 masquerade comment "NAT64 SNAT"
+    }
+  }
+
+config_schema:
+  type: object
+  properties:
+    prefix:
+      type: string
+      default: "64:ff9b::/96"
+      description: NAT64 well-known prefix
+    ipv4_pool:
+      type: string
+      default: "192.168.255.0/24"
+      description: IPv4 pool for translation
+    dynamic_pool:
+      type: string
+      default: "192.168.255.0/24"
+      description: Dynamic IPv4 pool
+    dns64_server:
+      type: string
+      default: ""
+      description: DNS64 server address (if external)
+
+selftest:
+  - test_nat64_interface
+  - test_nat64_translation

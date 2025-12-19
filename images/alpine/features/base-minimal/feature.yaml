@@ -1,0 +1,122 @@
+name: base-minimal
+version: 1.0.0
+description: "Minimal baseline utilities, cloud-init hooks, and selftest framework"
+
+packages:
+  # Core
+  - alpine-base
+  - busybox
+  - busybox-extras
+  - openrc
+  
+  # Networking
+  - iproute2
+  - iptables
+  - nftables
+  - tcpdump
+  - curl
+  - wget
+  - ca-certificates
+  - openssh-client
+  - openssh-server
+  - dhcpcd
+  
+  # Utilities
+  - bash
+  - jq
+  - python3
+  - py3-pip
+  
+  # Cloud-init
+  - cloud-init
+  
+  # For telemetry/testing
+  - socat
+  - netcat-openbsd
+  
+  # Cryptography for signature verification
+  - openssl
+  - libsodium
+
+services_enable:
+  - sshd
+  - dhcpcd
+  - chronyd
+  - nftables
+
+services_disable: []
+
+firewall_rules:
+  - chain: input
+    rule: "ct state established,related accept"
+    comment: "Allow established connections"
+  - chain: input
+    rule: "iif lo accept"
+    comment: "Allow loopback"
+  - chain: input
+    rule: "tcp dport 22 accept"
+    comment: "Allow SSH"
+  - chain: input
+    rule: "icmp type echo-request accept"
+    comment: "Allow ICMP ping"
+  - chain: input
+    rule: "icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept"
+    comment: "Allow ICMPv6"
+
+directories:
+  - path: /opt/infrasim
+    mode: "0755"
+  - path: /opt/infrasim/selftest
+    mode: "0755"
+  - path: /opt/infrasim/trust
+    mode: "0700"
+  - path: /etc/infrasim
+    mode: "0755"
+  - path: /etc/infrasim/overlays
+    mode: "0755"
+  - path: /etc/infrasim/trust
+    mode: "0700"
+  - path: /var/lib/infrasim
+    mode: "0755"
+  - path: /var/lib/infrasim/provenance
+    mode: "0755"
+
+files:
+  - src: verify-signature.sh
+    dst: /opt/infrasim/bin/verify-signature.sh
+    mode: "0755"
+  - src: node-descriptor-template.json
+    dst: /etc/infrasim/node-descriptor.json.template
+    mode: "0644"
+  - src: selftest-runner.sh
+    dst: /opt/infrasim/selftest/runner.sh
+    mode: "0755"
+  - src: nftables-base.conf
+    dst: /etc/nftables.d/00-base.nft
+    mode: "0644"
+
+cloud_init:
+  bootcmd:
+    - mkdir -p /opt/infrasim/bin /opt/infrasim/selftest
+  runcmd:
+    - chmod +x /opt/infrasim/bin/*.sh || true
+    - /opt/infrasim/selftest/runner.sh --quick || true
+
+provides:
+  - base
+  - selftest-framework
+  - signature-verification
+
+security:
+  trust_boundary: none
+  requires_verification: false
+  never_auto_trust: []
+
+selftest:
+  manifest: selftest/manifest.json
+  entrypoint: selftest/run.sh
+  required: true
+
+metadata:
+  maintainer: infrasim-team
+  license: MIT

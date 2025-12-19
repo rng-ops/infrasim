@@ -1,0 +1,149 @@
+# Alpine Variant: wireguard
+# ===========================
+# Alpine image with WireGuard mesh VPN for peer-to-peer networking.
+# Uses wireguard-tools for configuration and key management.
+
+variant: wireguard
+description: "Alpine Linux with WireGuard mesh VPN"
+base_image: alpine
+alpine_version: "3.20"
+
+# Variant-specific packages
+packages:
+  - wireguard-tools
+  - wireguard-lts
+  # DNS-SD for peer discovery
+  - avahi
+  - avahi-tools
+  # QR code generation for mobile config
+  - libqrencode
+
+# Services to enable
+services:
+  - sshd
+  - dhcpcd
+  - chronyd
+  - wireguard
+  - avahi-daemon
+
+# Services explicitly disabled
+services_disabled:
+  - tailscale
+
+# Network configuration
+network:
+  interfaces:
+    - name: eth0
+      type: dhcp
+    - name: wg0
+      type: wireguard
+      # Template-based configuration
+      config_template: wg0.conf.template
+
+# WireGuard-specific configuration
+wireguard:
+  # Interface settings
+  interface:
+    name: wg0
+    # Listen port (0 = random)
+    listen_port: 51820
+    # Address assigned at boot via cloud-init or DHCP-like mechanism
+    address_template: "10.50.{subnet}.{host}/24"
+    # MTU for VPN traffic
+    mtu: 1420
+    # DNS if tunneling all traffic
+    dns: null
+    
+  # Mesh configuration
+  mesh:
+    enabled: true
+    # Automatic peer discovery
+    discovery:
+      type: dns-sd
+      service_name: "_wireguard._udp"
+    # Key rotation interval (hours)
+    key_rotation: 168  # 7 days
+    # Keepalive for NAT traversal
+    persistent_keepalive: 25
+    
+  # Peer template (populated by orchestrator)
+  peer_template:
+    public_key: "{PEER_PUBLIC_KEY}"
+    endpoint: "{PEER_ENDPOINT}:{PEER_PORT}"
+    allowed_ips: "{PEER_ALLOWED_IPS}"
+    preshared_key: "{PEER_PSK}"
+
+# Cloud-init modules enabled
+cloud_init:
+  modules:
+    - ssh
+    - users-groups
+    - write-files
+    - runcmd
+    - final-message
+    
+  # Variant-specific cloud-init content
+  write_files:
+    - path: /etc/wireguard/wg0.conf
+      permissions: "0600"
+      content_template: wg0.conf.template
+      
+    - path: /opt/infrasim/wireguard/peer-discovery.sh
+      permissions: "0755"
+      content_file: peer-discovery.sh
+      
+  runcmd:
+    - "wg-quick up wg0 || true"
+    - "/opt/infrasim/wireguard/peer-discovery.sh &"
+
+# Telemetry configuration
+telemetry:
+  enabled: true
+  agent: /opt/infrasim/telemetry/telemetry-agent.sh
+  export:
+    type: file
+    path: /var/log/infrasim-telemetry.log
+  # WireGuard-specific metrics
+  metrics:
+    - wg_peer_rx_bytes
+    - wg_peer_tx_bytes
+    - wg_peer_last_handshake
+    - wg_peer_allowed_ips
+
+# Security hardening
+security:
+  disable_ipv6: false
+  ssh:
+    permit_root_login: false
+    password_authentication: true
+    pubkey_authentication: true
+  firewall:
+    default_input: drop
+    default_forward: drop
+    default_output: accept
+    rules:
+      - comment: "Allow established connections"
+        rule: "ct state established,related accept"
+      - comment: "Allow loopback"
+        rule: "iif lo accept"
+      - comment: "Allow SSH"
+        rule: "tcp dport 22 accept"
+      - comment: "Allow WireGuard"
+        rule: "udp dport 51820 accept"
+      - comment: "Allow ICMP"
+        rule: "icmp type echo-request accept"
+      - comment: "Allow traffic from WireGuard interface"
+        rule: "iif wg0 accept"
+
+# Overlay metadata
+overlay:
+  name: overlay-wireguard.qcow2
+  compression: zstd
+  hash: null
+
+# Build metadata
+build:
+  script: build-variant.sh
+  args:
+    - --variant=wireguard
+  runner_label: infrasim-runner-wireguard

@@ -1,0 +1,22 @@
+# WireGuard interface configuration template
+# Variables are substituted at runtime by cloud-init or compose-profile.sh
+
+[Interface]
+PrivateKey = ${WG_PRIVATE_KEY}
+Address = ${WG_ADDRESS_IPV4}/24, ${WG_ADDRESS_IPV6}/64
+ListenPort = ${WG_LISTEN_PORT:-51820}
+MTU = ${WG_MTU:-1420}
+Table = ${WG_TABLE:-auto}
+FwMark = ${WG_FWMARK:-0x51820}
+
+# Post-up: Apply firewall rules and start peer sync
+PostUp = /etc/wireguard/wg-up.sh %i
+
+# Post-down: Clean up
+PostDown = /etc/wireguard/wg-down.sh %i
+
+# DNS (optional, set via cloud-init)
+# DNS = ${WG_DNS:-}
+
+# Peers are dynamically added via apply-peers.sh
+# Do not add static peers here - use peer descriptors

@@ -1,0 +1,37 @@
+# Profile: No VPN Minimal
+# Base Alpine with cloud-init and selftest framework only
+# Use case: Testing, development, or as base for custom configurations
+
+name: no-vpn-minimal
+version: 1.0.0
+description: >
+  Minimal Alpine image with cloud-init and selftest framework.
+  No VPN or mesh networking. Suitable for development, testing,
+  or as a base for custom configurations.
+
+base: alpine:3.19
+
+features:
+  - base-minimal
+
+feature_config: {}
+
+test_requirements:
+  - boot_successful
+  - cloud_init_complete
+  - ssh_accessible
+  - selftest_passes
+
+build_options:
+  format: qcow2
+  compression: true
+  size: 2G
+
+metadata:
+  use_cases:
+    - development
+    - testing
+    - custom_base
+  network_requirements:
+    - ipv4
+  security_level: baseline
