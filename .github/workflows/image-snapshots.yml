@@ -529,19 +529,19 @@ jobs:
         else
           # Create annotated tag with provenance info
           git tag -a "${TAG_NAME}" -m "Image snapshot: ${TAG_NAME}
-
-InfraSim Version: ${{ needs.build-infrasim.outputs.infrasim_version }}
-InfraSim SHA256: ${{ needs.build-infrasim.outputs.infrasim_sha256 }}
-Image SHA256: ${{ needs.build-alpine.outputs.image_sha256 }}
-Bundle SHA256: ${{ needs.create-snapshot.outputs.bundle_sha256 }}
-Dep Graph SHA256: ${{ needs.build-infrasim.outputs.dep_graph_sha256 }}
-
-Build: ${{ github.run_id }}
-Commit: ${{ github.sha }}"
+        
+        InfraSim Version: ${{ needs.build-infrasim.outputs.infrasim_version }}
+        InfraSim SHA256: ${{ needs.build-infrasim.outputs.infrasim_sha256 }}
+        Image SHA256: ${{ needs.build-alpine.outputs.image_sha256 }}
+        Bundle SHA256: ${{ needs.create-snapshot.outputs.bundle_sha256 }}
+        Dep Graph SHA256: ${{ needs.build-infrasim.outputs.dep_graph_sha256 }}
+        
+        Build: ${{ github.run_id }}
+        Commit: ${{ github.sha }}"
 
           git push origin "${TAG_NAME}"
           echo "tag_created=true" >> $GITHUB_OUTPUT
-          echo "✅ Created and pushed tag: ${TAG_NAME}"
+          echo "Created and pushed tag: ${TAG_NAME}"
         fi
     
     - name: Generate release notes
@@ -555,75 +555,57 @@ Commit: ${{ github.sha }}"
         INFRASIM_VERSION="${{ needs.build-infrasim.outputs.infrasim_version }}"
         INFRASIM_SHA256="${{ needs.build-infrasim.outputs.infrasim_sha256 }}"
         DEP_GRAPH_SHA256="${{ needs.build-infrasim.outputs.dep_graph_sha256 }}"
+        REPO="${{ github.repository }}"
         
-        cat > release-notes.md << EOF
-        ## Image Snapshot: ${TAG_NAME}
-        
-        This snapshot bundles an Alpine Linux qcow2 image with pinned InfraSim build provenance.
-        
-        ### 🔒 Build Provenance
-        
-        | Component | Version/Hash |
-        |-----------|--------------|
-        | InfraSim Version | \`${INFRASIM_VERSION}\` |
-        | InfraSim Binary SHA256 | \`${INFRASIM_SHA256}\` |
-        | Dependency Graph SHA256 | \`${DEP_GRAPH_SHA256}\` |
-        | Image SHA256 | \`${IMAGE_SHA256}\` |
-        | Bundle SHA256 | \`${BUNDLE_SHA256}\` |
-        
-        ### 📦 Contents
-        
-        | File | Description |
-        |------|-------------|
-        | \`disk/base.qcow2\` | Main disk image (Alpine ${ALPINE_VERSION}) |
-        | \`disk/snapshots/clean.qcow2\` | Clean overlay snapshot |
-        | \`meta/manifest.json\` | File checksums |
-        | \`meta/attestations/infrasim-build.json\` | InfraSim build provenance |
-        | \`meta/attestations/cargo-metadata.json\` | Full dependency graph |
-        | \`meta/image-provenance.json\` | Unified provenance document |
-        
-        ### ✅ Verification
-        
-        \`\`\`bash
-        # Download
-        curl -LO https://github.com/${{ github.repository }}/releases/download/${TAG_NAME}/${BUNDLE_NAME}.tar.gz
-        curl -LO https://github.com/${{ github.repository }}/releases/download/${TAG_NAME}/${BUNDLE_NAME}.tar.gz.sha256
-        
-        # Verify bundle integrity
-        shasum -a 256 -c ${BUNDLE_NAME}.tar.gz.sha256
-        
-        # Extract and verify image
-        tar -xzf ${BUNDLE_NAME}.tar.gz
-        echo "${IMAGE_SHA256}  disk/base.qcow2" | shasum -a 256 -c
-        
-        # Verify InfraSim provenance
-        cat meta/attestations/infrasim-build.json | jq .
-        \`\`\`
-        
-        ### 🚀 Quick Start
-        
-        \`\`\`bash
-        # Boot with QEMU (macOS Apple Silicon)
-        qemu-system-aarch64 -M virt -accel hvf -cpu host -m 512 \\
-          -drive file=disk/base.qcow2,format=qcow2,if=virtio \\
-          -bios /opt/homebrew/share/qemu/edk2-aarch64-code.fd \\
-          -nographic
-        
-        # Or use with InfraSim ${INFRASIM_VERSION}
-        isvm install ${INFRASIM_VERSION}
-        isvm use ${INFRASIM_VERSION}
-        infrasim --version
-        \`\`\`
-        
-        ---
-        
-        **Build Info:**
-        - Alpine Version: ${ALPINE_VERSION}
-        - Architecture: aarch64
-        - Git SHA: $(git rev-parse --short HEAD)
-        - Build Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-        - GitHub Run: [${{ github.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
-        EOF
+        {
+          echo "## Image Snapshot: ${TAG_NAME}"
+          echo ""
+          echo "This snapshot bundles an Alpine Linux qcow2 image with pinned InfraSim build provenance."
+          echo ""
+          echo "### Build Provenance"
+          echo ""
+          echo "| Component | Version/Hash |"
+          echo "|-----------|--------------|"
+          echo "| InfraSim Version | \`${INFRASIM_VERSION}\` |"
+          echo "| InfraSim Binary SHA256 | \`${INFRASIM_SHA256}\` |"
+          echo "| Dependency Graph SHA256 | \`${DEP_GRAPH_SHA256}\` |"
+          echo "| Image SHA256 | \`${IMAGE_SHA256}\` |"
+          echo "| Bundle SHA256 | \`${BUNDLE_SHA256}\` |"
+          echo ""
+          echo "### Contents"
+          echo ""
+          echo "| File | Description |"
+          echo "|------|-------------|"
+          echo "| \`disk/base.qcow2\` | Main disk image |"
+          echo "| \`disk/snapshots/clean.qcow2\` | Clean overlay snapshot |"
+          echo "| \`meta/manifest.json\` | File checksums |"
+          echo "| \`meta/attestations/infrasim-build.json\` | InfraSim build provenance |"
+          echo "| \`meta/attestations/cargo-metadata.json\` | Full dependency graph |"
+          echo "| \`meta/image-provenance.json\` | Unified provenance document |"
+          echo ""
+          echo "### Verification"
+          echo ""
+          echo "\`\`\`bash"
+          echo "# Download and verify"
+          echo "curl -LO https://github.com/${REPO}/releases/download/${TAG_NAME}/${BUNDLE_NAME}.tar.gz"
+          echo "curl -LO https://github.com/${REPO}/releases/download/${TAG_NAME}/${BUNDLE_NAME}.tar.gz.sha256"
+          echo "shasum -a 256 -c ${BUNDLE_NAME}.tar.gz.sha256"
+          echo ""
+          echo "# Extract and verify image"
+          echo "tar -xzf ${BUNDLE_NAME}.tar.gz"
+          echo "echo \"${IMAGE_SHA256}  disk/base.qcow2\" | shasum -a 256 -c"
+          echo "\`\`\`"
+          echo ""
+          echo "### Quick Start"
+          echo ""
+          echo "\`\`\`bash"
+          echo "# Boot with QEMU (macOS Apple Silicon)"
+          echo "qemu-system-aarch64 -M virt -accel hvf -cpu host -m 512 \\\\"
+          echo "  -drive file=disk/base.qcow2,format=qcow2,if=virtio \\\\"
+          echo "  -bios /opt/homebrew/share/qemu/edk2-aarch64-code.fd \\\\"
+          echo "  -nographic"
+          echo "\`\`\`"
+        } > release-notes.md
     
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
