@@ -98,7 +98,8 @@ fi
 
 # Create optional external snapshot (clean overlay)
 log_info "Creating clean overlay snapshot..."
-qemu-img create -f qcow2 -b base.qcow2 -F qcow2 "$BUNDLE_DIR/disk/snapshots/clean.qcow2"
+# Use relative path from snapshots/ directory to parent disk/
+qemu-img create -f qcow2 -b ../base.qcow2 -F qcow2 "$BUNDLE_DIR/disk/snapshots/clean.qcow2"
 
 # =============================================================================
 # Copy logs
