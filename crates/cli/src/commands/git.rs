@@ -6,8 +6,11 @@ use clap::{Args, Subcommand};
 use anyhow::{Result, Context};
 use serde::Serialize;
 use std::process::Command;
+use tracing::debug;
 
 use crate::output::{OutputFormat, TableDisplay, print_list};
+
+const COMMIT_HASH_DISPLAY_LENGTH: usize = 10;
 
 #[derive(Subcommand)]
 pub enum GitCommands {
@@ -47,8 +50,8 @@ impl TableDisplay for BranchInfo {
     fn row(&self) -> Vec<String> {
         vec![
             self.name.clone(),
-            if self.last_commit.len() > 10 {
-                self.last_commit[..10].to_string()
+            if self.last_commit.len() > COMMIT_HASH_DISPLAY_LENGTH {
+                self.last_commit[..COMMIT_HASH_DISPLAY_LENGTH].to_string()
             } else {
                 self.last_commit.clone()
             },
@@ -65,9 +68,11 @@ pub async fn execute(cmd: GitCommands, format: OutputFormat) -> Result<()> {
 }
 
 async fn execute_branches(args: BranchesArgs, format: OutputFormat) -> Result<()> {
-    let mut branches = get_branches(args.remotes || args.all)?;
+    let include_remotes = args.remotes || args.all;
+    let mut branches = get_branches(include_remotes)?;
     
     // Sort by commit date (most recent first)
+    // Note: git's %ci format produces ISO 8601 dates which sort correctly lexicographically
     branches.sort_by(|a, b| b.last_commit_date.cmp(&a.last_commit_date));
     
     // Apply limit if specified
@@ -120,6 +125,7 @@ fn get_branches(include_remotes: bool) -> Result<Vec<BranchInfo>> {
             .context(format!("Failed to get log for branch {}", branch_name))?;
 
         if !log_output.status.success() {
+            debug!("Skipping branch '{}': unable to get commit info", branch_name);
             continue; // Skip branches we can't get info for
         }
 
@@ -137,6 +143,8 @@ fn get_branches(include_remotes: bool) -> Result<Vec<BranchInfo>> {
                 last_commit_date: commit_date,
                 author,
             });
+        } else {
+            debug!("Skipping branch '{}': insufficient commit data", branch_name);
         }
     }
 
