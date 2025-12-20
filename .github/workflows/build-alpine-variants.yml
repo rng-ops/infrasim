@@ -180,14 +180,12 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: alpine-base
-        path: images/alpine/
+        path: images/alpine/output/
     
     - name: Build no-vpn variant
       run: |
         chmod +x images/alpine/build-variant.sh
         cd images/alpine
-        
-        ls -la output/  # Debug: show what was downloaded
         
         ./build-variant.sh \
           --variant=no-vpn \
@@ -228,14 +226,12 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: alpine-base
-        path: images/alpine/
+        path: images/alpine/output/
     
     - name: Build wireguard variant
       run: |
         chmod +x images/alpine/build-variant.sh
         cd images/alpine
-        
-        ls -la output/  # Debug: show what was downloaded
         
         ./build-variant.sh \
           --variant=wireguard \
@@ -294,14 +290,12 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: alpine-base
-        path: images/alpine/
+        path: images/alpine/output/
     
     - name: Build tailscale variant
       run: |
         chmod +x images/alpine/build-variant.sh
         cd images/alpine
-        
-        ls -la output/  # Debug: show what was downloaded
         
         ./build-variant.sh \
           --variant=tailscale \
@@ -345,14 +339,12 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: alpine-base
-        path: images/alpine/
+        path: images/alpine/output/
     
     - name: Build dual-vpn variant
       run: |
         chmod +x images/alpine/build-variant.sh
         cd images/alpine
-        
-        ls -la output/  # Debug: show what was downloaded
         
         ./build-variant.sh \
           --variant=dual-vpn \
