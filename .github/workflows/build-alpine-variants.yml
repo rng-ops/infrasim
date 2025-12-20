@@ -152,9 +152,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: alpine-base
-        path: |
-          images/alpine/output/base.qcow2
-          images/alpine/output/meta/
+        path: images/alpine/output/
         retention-days: 1
 
   # ===========================================================================
@@ -182,12 +180,14 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: alpine-base
-        path: images/alpine/output/
+        path: images/alpine/
     
     - name: Build no-vpn variant
       run: |
         chmod +x images/alpine/build-variant.sh
         cd images/alpine
+        
+        ls -la output/  # Debug: show what was downloaded
         
         ./build-variant.sh \
           --variant=no-vpn \
@@ -228,12 +228,14 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: alpine-base
-        path: images/alpine/output/
+        path: images/alpine/
     
     - name: Build wireguard variant
       run: |
         chmod +x images/alpine/build-variant.sh
         cd images/alpine
+        
+        ls -la output/  # Debug: show what was downloaded
         
         ./build-variant.sh \
           --variant=wireguard \
@@ -292,12 +294,14 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: alpine-base
-        path: images/alpine/output/
+        path: images/alpine/
     
     - name: Build tailscale variant
       run: |
         chmod +x images/alpine/build-variant.sh
         cd images/alpine
+        
+        ls -la output/  # Debug: show what was downloaded
         
         ./build-variant.sh \
           --variant=tailscale \
@@ -341,12 +345,14 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: alpine-base
-        path: images/alpine/output/
+        path: images/alpine/
     
     - name: Build dual-vpn variant
       run: |
         chmod +x images/alpine/build-variant.sh
         cd images/alpine
+        
+        ls -la output/  # Debug: show what was downloaded
         
         ./build-variant.sh \
           --variant=dual-vpn \

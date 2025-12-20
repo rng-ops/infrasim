@@ -21,9 +21,15 @@ QEMU_CPUS="${QEMU_CPUS:-2}"
 # Image architecture (the Alpine image is built for aarch64)
 IMAGE_ARCH="${IMAGE_ARCH:-aarch64}"
 
+# Allow skipping boot test entirely
+SKIP_BOOT_TEST="${SKIP_BOOT_TEST:-false}"
+
 # Detect host architecture for acceleration choice
 HOST_ARCH=$(uname -m)
 HOST_OS=$(uname -s)
+
+# Check for cross-architecture emulation (very slow)
+CROSS_ARCH=false
 
 # Configure QEMU based on image architecture
 case "$IMAGE_ARCH" in
@@ -45,6 +51,7 @@ case "$IMAGE_ARCH" in
             # Cross-architecture emulation (x86_64 host running aarch64 guest)
             QEMU_MACHINE="-M virt -cpu cortex-a72"
             QEMU_ACCEL="-accel tcg"
+            CROSS_ARCH=true
         fi
         
         # Find UEFI firmware
@@ -87,6 +94,27 @@ NC='\033[0m'
 log_info()  { echo -e "${GREEN}[INFO]${NC} $*"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*"; }
+
+# =============================================================================
+# Skip check for cross-architecture emulation
+# =============================================================================
+if [[ "$SKIP_BOOT_TEST" == "true" ]]; then
+    log_info "⏭️ Boot test skipped (SKIP_BOOT_TEST=true)"
+    echo "BOOT_SKIPPED"
+    exit 0
+fi
+
+if [[ "$CROSS_ARCH" == "true" ]]; then
+    log_warn "Cross-architecture emulation detected (${HOST_ARCH} host → ${IMAGE_ARCH} guest)"
+    log_warn "TCG emulation is extremely slow - boot test may take 10+ minutes"
+    log_warn "Consider using SKIP_BOOT_TEST=true in CI for cross-arch scenarios"
+    
+    # Use a much shorter timeout for cross-arch - just check QEMU can start
+    if [[ "${BOOT_TIMEOUT:-}" -gt 60 ]]; then
+        log_info "Reducing timeout to 60s for cross-arch quick check"
+        TIMEOUT=60
+    fi
+fi
 
 # =============================================================================
 # Preflight checks

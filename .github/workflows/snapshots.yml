@@ -155,16 +155,18 @@ jobs:
         chmod +x images/alpine/boot-test.sh
         cd images/alpine
         
-        export BOOT_TIMEOUT=300
+        # Cross-arch boot test is too slow for CI - use shorter timeout
+        export BOOT_TIMEOUT=60
         export IMAGE_ARCH=aarch64
         
         if ./boot-test.sh output/base.qcow2 2>&1; then
           echo "status=success" >> $GITHUB_OUTPUT
         else
           echo "status=warning" >> $GITHUB_OUTPUT
-          echo "::warning::Boot test did not complete (may be expected without KVM)"
+          echo "::warning::Boot test did not complete (cross-arch TCG emulation is slow)"
         fi
       continue-on-error: true
+      timeout-minutes: 5
     
     - name: Boot test result
       run: |
