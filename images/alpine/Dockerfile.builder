@@ -40,8 +40,6 @@ RUN apk add --no-cache \
     dosfstools \
     mtools \
     parted \
-    # Guestfish/libguestfs (Alpine's guestfs-tools)
-    libguestfs \
     # Cloud-init
     cloud-init \
     # Cryptography
@@ -54,6 +52,10 @@ RUN apk add --no-cache \
     py3-pip \
     py3-yaml \
     py3-cryptography
+
+# Note: libguestfs/guestfs-tools is not available in Alpine.
+# For full image customization, use a Debian/Ubuntu-based builder.
+# This builder works for CI validation mode (CI_VALIDATION_ONLY=true).
 
 # Set up libguestfs to work without KVM
 ENV LIBGUESTFS_BACKEND=direct
