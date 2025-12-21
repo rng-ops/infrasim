@@ -29,8 +29,6 @@ on:
 env:
   ALPINE_VERSION: "3.19"
   REGISTRY: ghcr.io
-  # Default to self-hosted runner when available
-  USE_SELF_HOSTED: ${{ github.event.inputs.use_self_hosted != 'false' }}
 
 jobs:
   # Validate all profiles and features
@@ -118,9 +116,9 @@ jobs:
   build:
     name: Build Profile
     needs: validate
-    # Prefer self-hosted runner, fall back to ubuntu-latest
-    # Self-hosted runners should have labels: self-hosted, macOS, ARM64, docker
-    runs-on: ${{ (env.USE_SELF_HOSTED == 'true' || github.event.inputs.use_self_hosted != 'false') && 'self-hosted' || 'ubuntu-latest' }}
+    # Prefer self-hosted runner when available, fall back to ubuntu-latest
+    # Use input parameter directly (env not available in runs-on context)
+    runs-on: ${{ github.event.inputs.use_self_hosted != 'false' && 'self-hosted' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
