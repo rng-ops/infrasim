@@ -227,7 +227,7 @@ jobs:
   # Run integration tests
   test:
     name: Integration Tests
-    needs: build
+    needs: [validate, build]
     if: github.event.inputs.run_integration_tests != 'false'
     runs-on: ubuntu-latest
     strategy:
