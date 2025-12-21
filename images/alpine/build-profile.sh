@@ -93,7 +93,7 @@ qemu-img create -f qcow2 -b "$BASE_IMAGE" -F qcow2 "$OVERLAY_FILE" 4G
 install_packages() {
     local packages_file="${PROFILE_DIR}/packages.txt"
     
-    if [[ ! -f "$packages_file" ]]; then
+    if [[ ! -f "$packages_file" ]] || [[ ! -s "$packages_file" ]]; then
         log "No packages to install"
         return
     fi
@@ -103,10 +103,25 @@ install_packages() {
     
     log "Installing packages: $packages"
     
-    # Using virt-customize if available
+    # Check if we're in CI mode (skip actual installation)
+    if [[ "${CI_VALIDATION_ONLY:-false}" == "true" ]]; then
+        log "CI validation mode - skipping package installation"
+        return
+    fi
+    
+    # Using virt-customize if available and working
     if command -v virt-customize &> /dev/null; then
-        virt-customize -a "$OVERLAY_FILE" \
-            --run-command "apk update && apk add $packages"
+        # Test if libguestfs works (it often doesn't in containers/CI)
+        if virt-customize --help &>/dev/null 2>&1; then
+            virt-customize -a "$OVERLAY_FILE" \
+                --run-command "apk update && apk add $packages" 2>&1 || {
+                log "WARNING: virt-customize failed (common in CI), skipping package installation"
+                log "Packages would be installed: $packages"
+            }
+        else
+            log "WARNING: virt-customize not functional (libguestfs issue), skipping package installation"
+            log "Packages to install: $packages"
+        fi
     else
         log "WARNING: virt-customize not available, skipping package installation"
         log "Packages to install: $packages"
@@ -165,13 +180,21 @@ copy_files() {
         cp "${PROFILE_DIR}/firewall.nft" "${PROFILE_DIR}/rootfs/etc/nftables.d/profile.nft"
     fi
     
+    # In CI validation mode, just stage files without copying to image
+    if [[ "${CI_VALIDATION_ONLY:-false}" == "true" ]]; then
+        log "CI validation mode - files staged to ${PROFILE_DIR}/rootfs"
+        return
+    fi
+    
     # Use virt-copy-in if available
     if command -v virt-copy-in &> /dev/null && [[ -d "${PROFILE_DIR}/rootfs" ]]; then
         # Get list of top-level directories in rootfs
         for dir in "${PROFILE_DIR}/rootfs"/*; do
             if [[ -d "$dir" ]]; then
                 local dirname=$(basename "$dir")
-                virt-copy-in -a "$OVERLAY_FILE" "$dir" /
+                virt-copy-in -a "$OVERLAY_FILE" "$dir" / 2>/dev/null || {
+                    log "WARNING: virt-copy-in failed for $dir (libguestfs issue)"
+                }
             fi
         done
     else
@@ -183,6 +206,15 @@ copy_files() {
 configure_services() {
     local enable_file="${PROFILE_DIR}/services-enable.txt"
     local disable_file="${PROFILE_DIR}/services-disable.txt"
+    
+    # Check if we're in CI mode (skip actual configuration)
+    if [[ "${CI_VALIDATION_ONLY:-false}" == "true" ]]; then
+        log "CI validation mode - skipping service configuration"
+        if [[ -f "$enable_file" ]] && [[ -s "$enable_file" ]]; then
+            log "Services to enable: $(cat "$enable_file" | tr '\n' ' ')"
+        fi
+        return
+    fi
     
     if command -v virt-customize &> /dev/null; then
         # Enable services

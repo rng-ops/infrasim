@@ -20,6 +20,11 @@ on:
         description: 'Run integration tests'
         required: false
         default: 'true'
+      use_self_hosted:
+        description: 'Use self-hosted runner for full builds'
+        required: false
+        default: 'false'
+        type: boolean
 
 env:
   ALPINE_VERSION: "3.19"
@@ -111,7 +116,7 @@ jobs:
   build:
     name: Build Profile
     needs: validate
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.inputs.use_self_hosted == 'true' && 'self-hosted' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -119,12 +124,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Install build dependencies
+      # For GitHub-hosted runners: install minimal deps, run in validation mode
+      - name: Install build dependencies (GitHub-hosted)
+        if: github.event.inputs.use_self_hosted != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             qemu-utils \
-            libguestfs-tools \
             yq \
             jq
       
@@ -134,7 +140,9 @@ jobs:
           chmod +x compose-profile.sh
           ./compose-profile.sh ${{ matrix.profile }}
       
-      - name: Build profile image
+      # GitHub-hosted: validation only (no libguestfs)
+      - name: Build profile image (validation mode)
+        if: github.event.inputs.use_self_hosted != 'true'
         run: |
           cd images/alpine
           chmod +x build-profile.sh
@@ -142,9 +150,40 @@ jobs:
           # Create a minimal base image for testing
           qemu-img create -f qcow2 alpine-base.qcow2 2G
           
+          # CI validation mode - libguestfs doesn't work in GitHub Actions
+          export CI_VALIDATION_ONLY=true
+          
           ./build-profile.sh ${{ matrix.profile }} \
             --base-image alpine-base.qcow2 \
             --output output/${{ matrix.profile }}.qcow2
+      
+      # Self-hosted: full Docker build with libguestfs
+      - name: Build Docker builder image
+        if: github.event.inputs.use_self_hosted == 'true'
+        run: |
+          docker build -f images/alpine/Dockerfile.builder \
+            -t infrasim/alpine-builder:latest \
+            images/alpine/
+      
+      - name: Build profile image (Docker)
+        if: github.event.inputs.use_self_hosted == 'true'
+        run: |
+          cd images/alpine
+          chmod +x build-profile.sh compose-profile.sh
+          
+          # Create base image
+          qemu-img create -f qcow2 alpine-base.qcow2 2G
+          
+          # Run build in Docker container with full libguestfs support
+          docker run --rm \
+            --privileged \
+            -v "$(pwd):/workspace" \
+            -w /workspace \
+            -e CI_VALIDATION_ONLY=false \
+            infrasim/alpine-builder:latest \
+            ./build-profile.sh ${{ matrix.profile }} \
+              --base-image alpine-base.qcow2 \
+              --output output/${{ matrix.profile }}.qcow2
       
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
