@@ -23,12 +23,14 @@ on:
       use_self_hosted:
         description: 'Use self-hosted runner for full builds'
         required: false
-        default: 'false'
+        default: 'true'
         type: boolean
 
 env:
   ALPINE_VERSION: "3.19"
   REGISTRY: ghcr.io
+  # Default to self-hosted runner when available
+  USE_SELF_HOSTED: ${{ github.event.inputs.use_self_hosted != 'false' }}
 
 jobs:
   # Validate all profiles and features
@@ -116,7 +118,9 @@ jobs:
   build:
     name: Build Profile
     needs: validate
-    runs-on: ${{ github.event.inputs.use_self_hosted == 'true' && 'self-hosted' || 'ubuntu-latest' }}
+    # Prefer self-hosted runner, fall back to ubuntu-latest
+    # Self-hosted runners should have labels: self-hosted, macOS, ARM64, docker
+    runs-on: ${{ (env.USE_SELF_HOSTED == 'true' || github.event.inputs.use_self_hosted != 'false') && 'self-hosted' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -124,9 +128,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      # For GitHub-hosted runners: install minimal deps, run in validation mode
+      # Detect runner type
+      - name: Detect runner environment
+        id: runner
+        run: |
+          if command -v docker &>/dev/null && docker info &>/dev/null; then
+            echo "has_docker=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_docker=false" >> $GITHUB_OUTPUT
+          fi
+          
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            echo "is_macos=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_macos=false" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "Runner: ${{ runner.name }}"
+          echo "OS: ${{ runner.os }}"
+          echo "Arch: ${{ runner.arch }}"
+      
+      # For GitHub-hosted runners: install minimal deps
       - name: Install build dependencies (GitHub-hosted)
-        if: github.event.inputs.use_self_hosted != 'true'
+        if: steps.runner.outputs.has_docker != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -142,7 +166,7 @@ jobs:
       
       # GitHub-hosted: validation only (no libguestfs)
       - name: Build profile image (validation mode)
-        if: github.event.inputs.use_self_hosted != 'true'
+        if: steps.runner.outputs.has_docker != 'true'
         run: |
           cd images/alpine
           chmod +x build-profile.sh
@@ -157,16 +181,16 @@ jobs:
             --base-image alpine-base.qcow2 \
             --output output/${{ matrix.profile }}.qcow2
       
-      # Self-hosted: full Docker build with libguestfs
+      # Self-hosted with Docker: full build with libguestfs
       - name: Build Docker builder image
-        if: github.event.inputs.use_self_hosted == 'true'
+        if: steps.runner.outputs.has_docker == 'true'
         run: |
           docker build -f images/alpine/Dockerfile.builder \
             -t infrasim/alpine-builder:latest \
             images/alpine/
       
       - name: Build profile image (Docker)
-        if: github.event.inputs.use_self_hosted == 'true'
+        if: steps.runner.outputs.has_docker == 'true'
         run: |
           cd images/alpine
           chmod +x build-profile.sh compose-profile.sh
