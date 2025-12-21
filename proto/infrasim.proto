@@ -64,6 +64,9 @@ service InfraSimDaemon {
   // Health and status
   rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
   rpc GetDaemonStatus(GetDaemonStatusRequest) returns (GetDaemonStatusResponse);
+  
+  // Artifact inspection
+  rpc InspectArtifact(InspectArtifactRequest) returns (InspectArtifactResponse);
 }
 
 // ============================================================================
@@ -663,3 +666,437 @@ message GetDaemonStatusResponse {
   string qemu_version = 7;
   bool hvf_available = 8;
 }
+
+// ============================================================================
+// Artifact Inspection Messages
+// ============================================================================
+
+message InspectArtifactRequest {
+  string path = 1;  // Path to .zip or .tar.gz bundle
+}
+
+message InspectArtifactResponse {
+  ArtifactInspectionReport report = 1;
+}
+
+message ArtifactInspectionReport {
+  string input_path = 1;
+  
+  // SHA256 verification of outer tarball
+  bool sha256_file_ok = 2;
+  string sha256_expected = 3;
+  string sha256_actual = 4;
+  
+  // Extracted file inventory
+  repeated FileEntry extracted_files = 5;
+  
+  // Manifest verification
+  ManifestCheck manifest = 6;
+  
+  // Attestation verification  
+  AttestationCheck attestations = 7;
+  
+  // qcow2 image analysis
+  repeated Qcow2Info qcow2_images = 8;
+  
+  // Signature status
+  SignatureStatus signatures = 9;
+  
+  // Issues found
+  repeated string warnings = 10;
+  repeated string errors = 11;
+  
+  // Overall status
+  bool passed = 12;
+}
+
+message FileEntry {
+  string path = 1;
+  int64 size = 2;
+  string sha256 = 3;
+}
+
+message ManifestCheck {
+  bool found = 1;
+  bool parsed_ok = 2;
+  string manifest_sha256 = 3;
+  int32 total_entries = 4;
+  int32 verified_entries = 5;
+  repeated string missing_files = 6;
+  repeated string mismatched_files = 7;
+  repeated string parse_errors = 8;
+}
+
+message AttestationCheck {
+  bool integrity_attestation_found = 1;
+  bool integrity_attestation_ok = 2;
+  string manifest_sha256_in_attestation = 3;
+  bool manifest_sha256_matches = 4;
+  repeated string malformed_json_files = 5;
+  repeated string truncation_detected = 6;
+}
+
+message Qcow2Info {
+  string path = 1;
+  bool valid_magic = 2;
+  int32 version = 3;
+  int64 virtual_size = 4;
+  int32 cluster_bits = 5;
+  int64 cluster_size = 6;
+  string backing_file = 7;
+  bool backing_file_exists = 8;
+  repeated string issues = 9;
+}
+
+message SignatureStatus {
+  bool signature_file_found = 1;
+  bool signature_info_found = 2;
+  string status = 3;  // "verified", "placeholder", "missing", "invalid"
+  string algorithm = 4;
+  string signer = 5;
+  repeated string remediation_hints = 6;
+}
+
+// ============================================================================
+// SDN (Software-Defined Networking) Messages
+// ============================================================================
+
+enum ApplianceType {
+  APPLIANCE_TYPE_UNSPECIFIED = 0;
+  APPLIANCE_TYPE_ROUTER = 1;
+  APPLIANCE_TYPE_FIREWALL = 2;
+  APPLIANCE_TYPE_VPN = 3;
+  APPLIANCE_TYPE_LOAD_BALANCER = 4;
+  APPLIANCE_TYPE_SENSOR = 5;
+  APPLIANCE_TYPE_DNS = 6;
+  APPLIANCE_TYPE_DHCP = 7;
+  APPLIANCE_TYPE_NAT = 8;
+  APPLIANCE_TYPE_CUSTOM = 9;
+}
+
+message InterfaceConfig {
+  string name = 1;
+  string network_id = 2;
+  string ip_address = 3;
+  string mac_address = 4;
+  int32 mtu = 5;
+  int32 vlan_id = 6;
+}
+
+message RouteConfig {
+  string destination = 1;
+  string gateway = 2;
+  string interface = 3;
+  int32 metric = 4;
+}
+
+message FirewallRule {
+  string chain = 1;      // input, output, forward
+  string action = 2;     // accept, drop, reject
+  string protocol = 3;   // tcp, udp, icmp, any
+  string source = 4;     // CIDR or any
+  string destination = 5;
+  int32 port = 6;
+  string comment = 7;
+}
+
+message WireGuardPeerConfig {
+  string name = 1;
+  string public_key = 2;
+  string endpoint = 3;
+  repeated string allowed_ips = 4;
+  int32 persistent_keepalive = 5;
+  string preshared_key = 6;
+}
+
+message WireGuardConfig {
+  string interface = 1;
+  int32 listen_port = 2;
+  string private_key = 3;
+  string address = 4;
+  string dns = 5;
+  repeated WireGuardPeerConfig peers = 6;
+}
+
+message ApplianceSpec {
+  ApplianceType type = 1;
+  string image = 2;
+  int32 cpus = 3;
+  int64 memory_mb = 4;
+  repeated InterfaceConfig interfaces = 5;
+  repeated RouteConfig routes = 6;
+  repeated FirewallRule firewall_rules = 7;
+  WireGuardConfig wireguard = 8;
+  string user_data = 9;  // cloud-init
+}
+
+message ApplianceStatus {
+  string state = 1;  // pending, running, stopped, error
+  string vm_id = 2;
+  repeated string assigned_ips = 3;
+  int64 uptime_seconds = 4;
+}
+
+message Appliance {
+  ResourceMeta meta = 1;
+  ApplianceSpec spec = 2;
+  ApplianceStatus status = 3;
+}
+
+message CreateApplianceRequest {
+  string name = 1;
+  ApplianceSpec spec = 2;
+  map<string, string> labels = 3;
+  bool auto_start = 4;
+}
+
+message CreateApplianceResponse {
+  Appliance appliance = 1;
+}
+
+message GetApplianceRequest {
+  string id = 1;
+}
+
+message GetApplianceResponse {
+  Appliance appliance = 1;
+}
+
+message DeleteApplianceRequest {
+  string id = 1;
+  bool delete_vm = 2;
+}
+
+message DeleteApplianceResponse {}
+
+message ListAppliancesRequest {
+  ApplianceType type_filter = 1;
+  string network_filter = 2;
+  map<string, string> label_selector = 3;
+}
+
+message ListAppliancesResponse {
+  repeated Appliance appliances = 1;
+}
+
+message CreatePeeringRequest {
+  string from_appliance = 1;
+  string to_appliance = 2;
+  string peering_type = 3;  // wireguard, tailscale, vxlan, gre
+  repeated string allowed_ips = 4;
+  bool use_tailscale = 5;
+}
+
+message CreatePeeringResponse {
+  string peering_id = 1;
+  string from_public_key = 2;
+  string to_public_key = 3;
+}
+
+// ============================================================================
+// Control Plane Messages (Tailscale-based C2)
+// ============================================================================
+
+message ControlPlaneNode {
+  string id = 1;
+  string name = 2;
+  string hostname = 3;
+  string tailscale_ip_v4 = 4;
+  string tailscale_ip_v6 = 5;
+  bool online = 6;
+  string os = 7;
+  repeated string tags = 8;
+  bool exit_node = 9;
+  string relay = 10;
+  int64 last_seen = 11;
+}
+
+message GetControlPlaneStatusRequest {}
+
+message GetControlPlaneStatusResponse {
+  bool connected = 1;
+  ControlPlaneNode self_node = 2;
+  int32 online_peers = 3;
+  int32 total_peers = 4;
+  string magic_dns_suffix = 5;
+}
+
+message ListControlPlaneNodesRequest {
+  string tag_filter = 1;
+  bool include_offline = 2;
+}
+
+message ListControlPlaneNodesResponse {
+  repeated ControlPlaneNode nodes = 1;
+}
+
+message DeployToNodeRequest {
+  string artifact_path = 1;
+  string artifact_sha256 = 2;
+  repeated string target_nodes = 3;
+  string terraform_config = 4;
+  string wireguard_config = 5;
+  bool wait_for_completion = 6;
+  int32 timeout_seconds = 7;
+}
+
+message DeployToNodeResponse {
+  string deployment_id = 1;
+  repeated NodeDeploymentStatus node_statuses = 2;
+}
+
+message NodeDeploymentStatus {
+  string node = 1;
+  string status = 2;  // pending, transferring, deploying, complete, failed
+  string error = 3;
+  int64 started_at = 4;
+  int64 completed_at = 5;
+}
+
+message PushArtifactRequest {
+  string local_path = 1;
+  repeated string target_nodes = 2;
+  string remote_path = 3;
+  bool verify_checksum = 4;
+}
+
+message PushArtifactResponse {
+  repeated ArtifactTransferStatus transfers = 1;
+}
+
+message ArtifactTransferStatus {
+  string node = 1;
+  bool success = 2;
+  string error = 3;
+  string sha256 = 4;
+  int64 bytes_transferred = 5;
+}
+
+// ============================================================================
+// Pipeline Messages
+// ============================================================================
+
+message PipelineStage {
+  string name = 1;
+  string image = 2;
+  repeated string commands = 3;
+  repeated string depends_on = 4;
+  int32 timeout_seconds = 5;
+}
+
+message PipelineTrigger {
+  string kind = 1;    // push, tag, schedule, manual
+  string pattern = 2; // branch/tag pattern or cron expression
+}
+
+message ArtifactDefinition {
+  string name = 1;
+  string path = 2;
+  string kind = 3;  // qcow2, tarball, binary
+  int32 retain_days = 4;
+}
+
+message Pipeline {
+  ResourceMeta meta = 1;
+  string description = 2;
+  repeated PipelineStage stages = 3;
+  repeated PipelineTrigger triggers = 4;
+  repeated ArtifactDefinition artifacts = 5;
+}
+
+message BuildProvenance {
+  string infrasim_version = 1;
+  string infrasim_sha256 = 2;
+  string cargo_deps_hash = 3;
+  string builder_identity = 4;
+  int64 build_timestamp = 5;
+  bool reproducible = 6;
+}
+
+message StageResult {
+  string name = 1;
+  string status = 2;  // pending, running, success, failed, cancelled
+  int64 started_at = 3;
+  int64 finished_at = 4;
+  int32 exit_code = 5;
+  int64 log_offset = 6;
+  int64 log_length = 7;
+}
+
+message BuildArtifact {
+  string name = 1;
+  string path = 2;
+  int64 size_bytes = 3;
+  string sha256 = 4;
+  bool signed = 5;
+  string download_url = 6;
+}
+
+message PipelineRun {
+  ResourceMeta meta = 1;
+  string pipeline_name = 2;
+  string status = 3;  // pending, running, success, failed, cancelled
+  string trigger_type = 4;
+  string commit_sha = 5;
+  string tag = 6;
+  repeated StageResult stages = 7;
+  repeated BuildArtifact artifacts = 8;
+  BuildProvenance provenance = 9;
+}
+
+message TriggerPipelineRequest {
+  string pipeline_name = 1;
+  string ref = 2;         // git ref (branch, tag, commit)
+  string tag = 3;         // tag to create on success
+  map<string, string> env = 4;
+  map<string, string> parameters = 5;
+  string target_node = 6;
+  bool wait = 7;
+}
+
+message TriggerPipelineResponse {
+  PipelineRun run = 1;
+}
+
+message GetPipelineRunRequest {
+  string id = 1;
+}
+
+message GetPipelineRunResponse {
+  PipelineRun run = 1;
+}
+
+message ListPipelineRunsRequest {
+  string pipeline_name = 1;
+  string status_filter = 2;
+  string node_filter = 3;
+  int32 limit = 4;
+}
+
+message ListPipelineRunsResponse {
+  repeated PipelineRun runs = 1;
+}
+
+message GetPipelineLogsRequest {
+  string run_id = 1;
+  string stage = 2;
+  int64 offset = 3;
+  int32 lines = 4;
+  bool follow = 5;
+}
+
+message GetPipelineLogsResponse {
+  bytes data = 1;
+  int64 offset = 2;
+  bool more_available = 3;
+}
+
+message CancelPipelineRequest {
+  string run_id = 1;
+  bool force = 2;
+}
+
+message CancelPipelineResponse {
+  bool cancelled = 1;
+}
+

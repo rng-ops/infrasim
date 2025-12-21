@@ -1,0 +1,84 @@
+# Alpine Variant: no-vpn
+# ========================
+# Base Alpine image without VPN software.
+# Suitable for isolated/air-gapped environments.
+
+variant: no-vpn
+description: "Base Alpine Linux image without VPN software"
+base_image: alpine
+alpine_version: "3.20"
+
+# Variant-specific packages (none for no-vpn)
+packages: []
+
+# Services to enable
+services:
+  - sshd
+  - dhcpcd
+  - chronyd
+
+# Services explicitly disabled
+services_disabled: []
+
+# Network configuration
+network:
+  # No VPN interface
+  interfaces:
+    - name: eth0
+      type: dhcp
+      
+# Cloud-init modules enabled
+cloud_init:
+  modules:
+    - ssh
+    - users-groups
+    - write-files
+    - runcmd
+    - final-message
+
+# Telemetry configuration
+telemetry:
+  enabled: true
+  agent: /opt/infrasim/telemetry/telemetry-agent.sh
+  # Local file logging only (no network export)
+  export:
+    type: file
+    path: /var/log/infrasim-telemetry.log
+
+# Security hardening
+security:
+  # Disable IPv6 if not needed
+  disable_ipv6: false
+  # SSH configuration
+  ssh:
+    permit_root_login: false
+    password_authentication: true
+    pubkey_authentication: true
+  # Firewall rules (nftables)
+  firewall:
+    default_input: drop
+    default_forward: drop
+    default_output: accept
+    rules:
+      - comment: "Allow established connections"
+        rule: "ct state established,related accept"
+      - comment: "Allow loopback"
+        rule: "iif lo accept"
+      - comment: "Allow SSH"
+        rule: "tcp dport 22 accept"
+      - comment: "Allow ICMP"
+        rule: "icmp type echo-request accept"
+
+# Overlay metadata
+overlay:
+  name: overlay-no-vpn.qcow2
+  compression: zstd
+  # SHA256 hash set at build time
+  hash: null
+
+# Build metadata
+build:
+  script: build-variant.sh
+  args:
+    - --variant=no-vpn
+  runner_label: infrasim-runner-no-vpn

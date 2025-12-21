@@ -14,7 +14,7 @@ mod generated {
     include!("generated/infrasim.v1.rs");
 }
 
-use commands::{vm, network, volume, console, snapshot, benchmark, attestation, web};
+use commands::{vm, network, volume, console, snapshot, benchmark, attestation, web, artifact, control, pipeline, sdn};
 
 /// InfraSim CLI - Terraform-Compatible QEMU Platform
 #[derive(Parser)]
@@ -70,6 +70,22 @@ enum Commands {
     #[command(subcommand)]
     Web(web::WebCommands),
 
+    /// Inspect and verify build artifacts
+    #[command(subcommand)]
+    Artifact(artifact::ArtifactCommands),
+
+    /// Control plane - Tailscale-based distributed node management
+    #[command(subcommand)]
+    Control(control::ControlCommands),
+
+    /// Build pipeline management
+    #[command(subcommand)]
+    Pipeline(pipeline::PipelineCommands),
+
+    /// Software-defined networking - network appliances and topologies
+    #[command(subcommand)]
+    Sdn(sdn::SdnCommands),
+
     /// Check daemon status
     Status,
 
@@ -103,6 +119,10 @@ async fn main() -> anyhow::Result<()> {
         Commands::Benchmark(args) => benchmark::execute(args, client?, cli.format).await?,
         Commands::Attestation(cmd) => attestation::execute(cmd, client?, cli.format).await?,
         Commands::Web(cmd) => web::execute(cmd).await?,
+        Commands::Artifact(cmd) => artifact::execute(cmd, client.ok(), cli.format).await?,
+        Commands::Control(cmd) => control::execute(cmd, client.ok(), cli.format).await?,
+        Commands::Pipeline(cmd) => pipeline::execute(cmd, cli.format).await?,
+        Commands::Sdn(cmd) => sdn::execute(cmd, client.ok(), cli.format).await?,
         Commands::Status => {
             match client {
                 Ok(mut c) => {

@@ -1,0 +1,57 @@
+# Profile: Tailscale + mTLS Control Plane
+# Tailscale mesh with mTLS for control plane API access
+# Use case: High-security environments requiring mutual TLS
+
+name: ts-mtls
+version: 1.0.0
+description: >
+  Tailscale mesh networking with mTLS-protected control plane.
+  Requires client certificates signed by a trusted CA for all
+  control plane API access. Layered security approach.
+
+base: alpine:3.19
+
+features:
+  - base-minimal
+  - vpn-tailscale
+  - control-mtls
+
+feature_config:
+  vpn-tailscale:
+    accept_routes: true
+    shields_up: true  # Extra security - block non-Tailscale traffic
+  
+  control-mtls:
+    require_client_cert: true
+    verify_depth: 2
+    control_port: 8443
+
+test_requirements:
+  - boot_successful
+  - cloud_init_complete
+  - ssh_accessible
+  - selftest_passes
+  - tailscale_connected
+  - mtls_configured
+
+build_options:
+  format: qcow2
+  compression: true
+  size: 2G
+
+metadata:
+  use_cases:
+    - high_security
+    - zero_trust
+    - regulated_environments
+  network_requirements:
+    - ipv4
+    - outbound_https
+  security_level: very_high
+  requires_secrets:
+    - auth_key
+    - ca_cert
+    - client_cert
+    - client_key
+  external_dependencies:
+    - tailscale.com

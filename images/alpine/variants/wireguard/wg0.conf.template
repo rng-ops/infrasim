@@ -1,0 +1,51 @@
+# WireGuard Configuration Template
+# =================================
+# This template is populated by InfraSim at deployment time.
+# Variables are replaced with actual values from the orchestrator.
+#
+# Template Variables:
+#   {PRIVATE_KEY}      - This node's WireGuard private key
+#   {ADDRESS}          - This node's VPN address (e.g., 10.50.1.2/24)
+#   {LISTEN_PORT}      - UDP port to listen on
+#   {DNS}              - DNS server (optional)
+#   {MTU}              - Interface MTU
+#   {PEERS}            - Block of peer configurations
+
+[Interface]
+# Private key for this node (generated at deployment)
+PrivateKey = {PRIVATE_KEY}
+
+# VPN address
+Address = {ADDRESS}
+
+# Listen port for incoming connections
+ListenPort = {LISTEN_PORT}
+
+# MTU (adjust for overhead)
+MTU = {MTU}
+
+# Optional: DNS server for split-tunnel
+# DNS = {DNS}
+
+# Post-up script for telemetry and routing
+PostUp = /opt/infrasim/wireguard/post-up.sh %i
+PostDown = /opt/infrasim/wireguard/post-down.sh %i
+
+# Save configuration changes
+SaveConfig = false
+
+# ============================================================================
+# Peers
+# ============================================================================
+# Peers are added dynamically by the orchestrator.
+# Each peer block follows this template:
+#
+# [Peer]
+# # Peer name: {PEER_NAME}
+# PublicKey = {PEER_PUBLIC_KEY}
+# PresharedKey = {PEER_PSK}
+# Endpoint = {PEER_ENDPOINT}:{PEER_PORT}
+# AllowedIPs = {PEER_ALLOWED_IPS}
+# PersistentKeepalive = 25
+
+{PEERS}

@@ -1,0 +1,54 @@
+# Profile: WireGuard + Bonjour
+# WireGuard mesh with mDNS/Bonjour for LAN discovery
+# Use case: LAN environments where mDNS is preferred
+
+name: wg-bonjour
+version: 1.0.0
+description: >
+  WireGuard mesh with Bonjour/mDNS for peer discovery on LAN.
+  Use this profile when deploying to environments where mDNS
+  is available and preferred over IPv6 rendezvous.
+
+base: alpine:3.19
+
+features:
+  - base-minimal
+  - vpn-wireguard
+  - discovery-bonjour
+
+feature_config:
+  vpn-wireguard:
+    listen_port: 51820
+    network_cidr: "10.100.0.0/16"
+    narrow_admission: true
+  
+  discovery-bonjour:
+    service_name: "infrasim"
+    service_port: 51820
+    deny_interfaces:
+      - wg0
+      - docker0
+
+test_requirements:
+  - boot_successful
+  - cloud_init_complete
+  - ssh_accessible
+  - selftest_passes
+  - wireguard_up
+  - avahi_running
+
+build_options:
+  format: qcow2
+  compression: true
+  size: 2G
+
+metadata:
+  use_cases:
+    - lan_mesh
+    - mdns_compatible
+    - apple_ecosystem
+  network_requirements:
+    - ipv4
+    - multicast
+  security_level: high
+  notes: "mDNS only works on local LAN segment"

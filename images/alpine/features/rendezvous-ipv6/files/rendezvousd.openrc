@@ -1,0 +1,43 @@
+#!/sbin/openrc-run
+# OpenRC init script for rendezvousd
+
+name="rendezvousd"
+description="IPv6 Rendezvous Peer Discovery Daemon"
+command="/usr/local/bin/rendezvousd"
+command_args="-c /etc/infrasim/rendezvous.conf"
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
+start_stop_daemon_args="--stdout /var/log/rendezvousd.log --stderr /var/log/rendezvousd.log"
+
+depend() {
+    need net
+    after firewall
+    before wireguard
+}
+
+start_pre() {
+    # Ensure config exists
+    if [ ! -f /etc/infrasim/rendezvous.conf ]; then
+        eerror "Configuration file not found: /etc/infrasim/rendezvous.conf"
+        return 1
+    fi
+    
+    # Check for mesh_secret
+    if ! grep -q '^mesh_secret=.\+' /etc/infrasim/rendezvous.conf; then
+        eerror "mesh_secret is not configured"
+        return 1
+    fi
+    
+    # Ensure node descriptor exists
+    if [ ! -f /etc/infrasim/node-descriptor.json ]; then
+        ewarn "Node descriptor not found, discovery will be limited"
+    fi
+    
+    # Create peers directory
+    mkdir -p /var/lib/infrasim/peer-descriptors
+    
+    # Create log file
+    touch /var/log/rendezvousd.log
+    
+    return 0
+}

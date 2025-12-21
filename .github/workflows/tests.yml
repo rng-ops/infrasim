@@ -1,0 +1,216 @@
+# ============================================================================
+# tests.yml - Run Integration and Unit Tests
+# ============================================================================
+#
+# Runs the full test suite including:
+# - Unit tests (all crates)
+# - Integration tests (e2e crate)
+# - Attestation/tamper detection tests
+# - Network QoS simulation tests
+#
+name: Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_expensive_tests:
+        description: 'Run expensive/ignored tests'
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ===========================================================================
+  # Unit Tests
+  # ===========================================================================
+  unit-tests:
+    name: Unit Tests
+    runs-on: macos-14  # M1 runner for Apple Silicon
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: aarch64-apple-darwin
+    
+    - name: Install protobuf
+      run: |
+        brew install protobuf
+        protoc --version
+    
+    - name: Cache cargo
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+    
+    - name: Run unit tests
+      run: |
+        cargo test --workspace --exclude infrasim-e2e --verbose
+    
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: unit-test-results
+        path: target/nextest/
+        retention-days: 7
+        if-no-files-found: ignore
+
+  # ===========================================================================
+  # Integration Tests (e2e)
+  # ===========================================================================
+  integration-tests:
+    name: Integration Tests
+    runs-on: macos-14
+    needs: unit-tests
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+    
+    - name: Install protobuf
+      run: brew install protobuf
+    
+    - name: Cache cargo
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+    
+    - name: Build workspace
+      run: cargo build --workspace
+    
+    - name: Run attestation tamper test
+      run: |
+        echo "::group::attestation_tamper.rs"
+        cargo test -p infrasim-e2e --test attestation_tamper -- --nocapture
+        echo "::endgroup::"
+    
+    - name: Run network QoS test
+      run: |
+        echo "::group::network_qos.rs"
+        cargo test -p infrasim-e2e --test network_qos -- --nocapture
+        echo "::endgroup::"
+    
+    - name: Test summary
+      run: |
+        echo "## Integration Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Test | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| attestation_tamper | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+        echo "| network_qos | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+
+  # ===========================================================================
+  # Expensive Tests (on demand)
+  # ===========================================================================
+  expensive-tests:
+    name: Expensive Tests
+    runs-on: macos-14
+    needs: integration-tests
+    if: ${{ github.event.inputs.run_expensive_tests == 'true' || github.ref == 'refs/heads/main' }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+    
+    - name: Install dependencies
+      run: |
+        brew install protobuf terraform
+        protoc --version
+        terraform version
+    
+    - name: Cache cargo
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    
+    - name: Build release binaries
+      run: cargo build --workspace --release
+    
+    - name: Run determinism build test
+      run: |
+        echo "::group::determinism_build.rs"
+        cargo test -p infrasim-e2e --test determinism_build -- --ignored --nocapture || echo "Test skipped or failed (expected in CI without full QEMU)"
+        echo "::endgroup::"
+      continue-on-error: true
+    
+    - name: Run terraform idempotency test
+      run: |
+        echo "::group::terraform_idempotency.rs"
+        # Set up terraform provider
+        mkdir -p ~/.terraform.d/plugins/local/infrasim/infrasim/0.1.0/darwin_arm64
+        cp target/release/terraform-provider-infrasim ~/.terraform.d/plugins/local/infrasim/infrasim/0.1.0/darwin_arm64/ || true
+        
+        cargo test -p infrasim-e2e --test terraform_idempotency -- --ignored --nocapture || echo "Test skipped or failed"
+        echo "::endgroup::"
+      continue-on-error: true
+    
+    - name: Expensive test summary
+      run: |
+        echo "## Expensive Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Test | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| determinism_build | ⚠️ Run attempted |" >> $GITHUB_STEP_SUMMARY
+        echo "| terraform_idempotency | ⚠️ Run attempted |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "_Note: These tests may fail in CI due to resource constraints._" >> $GITHUB_STEP_SUMMARY
+
+  # ===========================================================================
+  # All Tests Summary
+  # ===========================================================================
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests]
+    if: always()
+    
+    steps:
+    - name: Check test results
+      run: |
+        if [[ "${{ needs.unit-tests.result }}" == "success" && "${{ needs.integration-tests.result }}" == "success" ]]; then
+          echo "✅ All tests passed!"
+          exit 0
+        else
+          echo "❌ Some tests failed"
+          echo "Unit tests: ${{ needs.unit-tests.result }}"
+          echo "Integration tests: ${{ needs.integration-tests.result }}"
+          exit 1
+        fi

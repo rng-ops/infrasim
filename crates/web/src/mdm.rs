@@ -10,7 +10,7 @@ use anyhow::{anyhow, Result};
 use plist::Dictionary;
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose,
-    IsCa, KeyPair as RcgenKeyPair, KeyUsagePurpose, SanType, PKCS_RSA_SHA256,
+    IsCa, KeyPair as RcgenKeyPair, KeyUsagePurpose, SanType, PKCS_ECDSA_P256_SHA256,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -68,8 +68,9 @@ impl SigningChain {
         root_dn.push(DnType::CommonName, format!("{} Root CA", config.org_name));
         root_params.distinguished_name = root_dn;
         
-        // Use RSA for maximum iOS compatibility
-        let root_key = RcgenKeyPair::generate_for(&PKCS_RSA_SHA256)?;
+        // Use ECDSA P-256 for broad compatibility (iOS, macOS, browsers)
+        // Note: RSA requires aws_lc_rs backend which has complex build deps
+        let root_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
         let root_cert = root_params.self_signed(&root_key)?;
 
         // Generate Signing Certificate (signed by root)
@@ -92,7 +93,7 @@ impl SigningChain {
             SanType::DnsName(config.domain.clone().try_into().map_err(|e| anyhow!("Invalid domain: {:?}", e))?),
         ];
 
-        let sign_key = RcgenKeyPair::generate_for(&PKCS_RSA_SHA256)?;
+        let sign_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
         let sign_cert = sign_params.signed_by(&sign_key, &root_cert, &root_key)?;
 
         let root_cert_pem = root_cert.pem();

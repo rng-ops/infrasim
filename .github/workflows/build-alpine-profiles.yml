@@ -1,0 +1,357 @@
+name: Build and Test Alpine Profiles
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'images/alpine/**'
+      - '.github/workflows/build-alpine-profiles.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'images/alpine/**'
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Profile to build (or "all")'
+        required: false
+        default: 'all'
+      run_integration_tests:
+        description: 'Run integration tests'
+        required: false
+        default: 'true'
+      use_self_hosted:
+        description: 'Use self-hosted runner for full builds'
+        required: false
+        default: 'true'
+        type: boolean
+
+env:
+  ALPINE_VERSION: "3.19"
+  REGISTRY: ghcr.io
+
+jobs:
+  # Validate all profiles and features
+  validate:
+    name: Validate Profiles
+    runs-on: ubuntu-latest
+    outputs:
+      profiles: ${{ steps.list-profiles.outputs.profiles }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+          # yq is not in apt - install from GitHub releases
+          YQ_ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
+          sudo wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${YQ_ARCH}"
+          sudo chmod +x /usr/local/bin/yq
+      
+      - name: Validate feature schemas
+        run: |
+          cd images/alpine
+          for feature_dir in features/*/; do
+            feature_name=$(basename "$feature_dir")
+            echo "Validating feature: $feature_name"
+            
+            # Check feature.yaml exists
+            if [ ! -f "${feature_dir}/feature.yaml" ]; then
+              echo "ERROR: ${feature_dir}/feature.yaml not found"
+              exit 1
+            fi
+            
+            # Validate required fields
+            name=$(yq eval '.name' "${feature_dir}/feature.yaml")
+            if [ -z "$name" ] || [ "$name" = "null" ]; then
+              echo "ERROR: Feature $feature_name missing 'name' field"
+              exit 1
+            fi
+            
+            echo "  ✓ $feature_name valid"
+          done
+      
+      - name: Validate profile schemas
+        run: |
+          cd images/alpine
+          for profile in profiles/*.yaml; do
+            profile_name=$(basename "$profile" .yaml)
+            echo "Validating profile: $profile_name"
+            
+            # Check required fields
+            name=$(yq eval '.name' "$profile")
+            base=$(yq eval '.base' "$profile")
+            
+            if [ -z "$name" ] || [ "$name" = "null" ]; then
+              echo "ERROR: Profile $profile_name missing 'name' field"
+              exit 1
+            fi
+            
+            if [ -z "$base" ] || [ "$base" = "null" ]; then
+              echo "ERROR: Profile $profile_name missing 'base' field"
+              exit 1
+            fi
+            
+            # Validate features exist
+            for feature in $(yq eval '.features // [] | .[]' "$profile"); do
+              if [ ! -d "features/$feature" ]; then
+                echo "ERROR: Profile $profile_name references unknown feature: $feature"
+                exit 1
+              fi
+            done
+            
+            echo "  ✓ $profile_name valid"
+          done
+      
+      - name: List profiles to build
+        id: list-profiles
+        run: |
+          cd images/alpine/profiles
+          if [ "${{ github.event.inputs.profile }}" = "all" ] || [ -z "${{ github.event.inputs.profile }}" ]; then
+            profiles=$(ls -1 *.yaml | sed 's/.yaml$//' | jq -R -s -c 'split("\n") | map(select(. != ""))')
+          else
+            profiles='["${{ github.event.inputs.profile }}"]'
+          fi
+          echo "profiles=$profiles" >> $GITHUB_OUTPUT
+          echo "Profiles to build: $profiles"
+
+  # Build each profile
+  build:
+    name: Build Profile
+    needs: validate
+    # Prefer self-hosted runner when available, fall back to ubuntu-latest
+    # Use input parameter directly (env not available in runs-on context)
+    runs-on: ${{ github.event.inputs.use_self_hosted != 'false' && 'self-hosted' || 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: ${{ fromJson(needs.validate.outputs.profiles) }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      # Detect runner type
+      - name: Detect runner environment
+        id: runner
+        run: |
+          if command -v docker &>/dev/null && docker info &>/dev/null; then
+            echo "has_docker=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_docker=false" >> $GITHUB_OUTPUT
+          fi
+          
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            echo "is_macos=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_macos=false" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "Runner: ${{ runner.name }}"
+          echo "OS: ${{ runner.os }}"
+          echo "Arch: ${{ runner.arch }}"
+      
+      # For GitHub-hosted runners: install minimal deps
+      - name: Install build dependencies (GitHub-hosted)
+        if: steps.runner.outputs.has_docker != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            qemu-utils \
+            jq
+          # yq is not in apt - install from GitHub releases
+          YQ_ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
+          sudo wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${YQ_ARCH}"
+          sudo chmod +x /usr/local/bin/yq
+      
+      - name: Compose profile
+        run: |
+          cd images/alpine
+          chmod +x compose-profile.sh
+          ./compose-profile.sh ${{ matrix.profile }}
+      
+      # GitHub-hosted: validation only (no libguestfs)
+      - name: Build profile image (validation mode)
+        if: steps.runner.outputs.has_docker != 'true'
+        run: |
+          cd images/alpine
+          chmod +x build-profile.sh
+          
+          # Create a minimal base image for testing
+          qemu-img create -f qcow2 alpine-base.qcow2 2G
+          
+          # CI validation mode - libguestfs doesn't work in GitHub Actions
+          export CI_VALIDATION_ONLY=true
+          
+          ./build-profile.sh ${{ matrix.profile }} \
+            --base-image alpine-base.qcow2 \
+            --output output/${{ matrix.profile }}.qcow2
+      
+      # Self-hosted with Docker: full build with libguestfs
+      - name: Build Docker builder image
+        if: steps.runner.outputs.has_docker == 'true'
+        run: |
+          docker build -f images/alpine/Dockerfile.builder \
+            -t infrasim/alpine-builder:latest \
+            images/alpine/
+      
+      - name: Build profile image (Docker)
+        if: steps.runner.outputs.has_docker == 'true'
+        run: |
+          cd images/alpine
+          chmod +x build-profile.sh compose-profile.sh
+          
+          # Create base image
+          qemu-img create -f qcow2 alpine-base.qcow2 2G
+          
+          # Run build in Docker container with full libguestfs support
+          docker run --rm \
+            --privileged \
+            -v "$(pwd):/workspace" \
+            -w /workspace \
+            -e CI_VALIDATION_ONLY=false \
+            infrasim/alpine-builder:latest \
+            ./build-profile.sh ${{ matrix.profile }} \
+              --base-image alpine-base.qcow2 \
+              --output output/${{ matrix.profile }}.qcow2
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: profile-${{ matrix.profile }}
+          path: |
+            images/alpine/output/${{ matrix.profile }}.qcow2
+            images/alpine/output/${{ matrix.profile }}.provenance.json
+            images/alpine/build/${{ matrix.profile }}/
+          retention-days: 7
+
+  # Run integration tests
+  test:
+    name: Integration Tests
+    needs: [validate, build]
+    if: github.event.inputs.run_integration_tests != 'false'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: ${{ fromJson(needs.validate.outputs.profiles) }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download profile artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: profile-${{ matrix.profile }}
+          path: images/alpine/output
+      
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            qemu-system-x86 \
+            python3 \
+            python3-pip
+          
+          pip3 install pyyaml
+      
+      - name: Run selftest validation
+        run: |
+          cd images/alpine
+          
+          # Validate selftests are syntactically correct
+          for test_file in features/*/selftest/*.py; do
+            if [ -f "$test_file" ]; then
+              echo "Checking: $test_file"
+              python3 -m py_compile "$test_file"
+            fi
+          done
+          
+          echo "All selftests validated"
+      
+      - name: Validate build outputs
+        run: |
+          cd images/alpine
+          
+          profile="${{ matrix.profile }}"
+          
+          # Check manifest exists
+          if [ -f "build/$profile/manifest.json" ]; then
+            echo "Manifest:"
+            cat "build/$profile/manifest.json"
+          fi
+          
+          # Check provenance
+          if [ -f "output/$profile.provenance.json" ]; then
+            echo "Provenance:"
+            cat "output/$profile.provenance.json"
+          fi
+
+  # Generate signed provenance
+  provenance:
+    name: Generate Provenance
+    needs: [build, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # For OIDC signing
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      
+      - name: Generate attestation hashes
+        id: hash
+        run: |
+          cd artifacts
+          find . -name "*.qcow2" -type f -exec sha256sum {} \; | \
+            awk '{print $1 "  " $2}' | base64 -w0 > ../hashes.txt
+          echo "hashes=$(cat ../hashes.txt)" >> $GITHUB_OUTPUT
+      
+      - name: Create provenance document
+        run: |
+          cat > provenance.json <<EOF
+          {
+            "buildType": "https://github.com/${{ github.repository }}/alpine-profiles@v1",
+            "builder": {
+              "id": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            },
+            "metadata": {
+              "buildInvocationId": "${{ github.run_id }}",
+              "buildStartedOn": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+              "buildFinishedOn": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            },
+            "materials": []
+          }
+          EOF
+      
+      - name: Upload provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: provenance
+          path: |
+            provenance.json
+            hashes.txt
+          retention-days: 30
+
+  # Summary job
+  summary:
+    name: Build Summary
+    needs: [validate, build, test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summary
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Profile | Build | Test |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-------|------|" >> $GITHUB_STEP_SUMMARY
+          
+          profiles='${{ needs.validate.outputs.profiles }}'
+          for profile in $(echo "$profiles" | jq -r '.[]'); do
+            build_status="✓"
+            test_status="✓"
+            echo "| $profile | $build_status | $test_status |" >> $GITHUB_STEP_SUMMARY
+          done

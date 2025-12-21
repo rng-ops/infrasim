@@ -1,0 +1,50 @@
+# Profile: Tailscale Managed
+# Tailscale-based mesh with managed control plane
+# Use case: Teams wanting simple setup with Tailscale's NAT traversal
+
+name: ts-managed
+version: 1.0.0
+description: >
+  Tailscale-based mesh networking with managed control plane.
+  Uses Tailscale's coordination servers for peer discovery and
+  NAT traversal. Simplest setup - just provide an auth key.
+
+base: alpine:3.19
+
+features:
+  - base-minimal
+  - vpn-tailscale
+
+feature_config:
+  vpn-tailscale:
+    # auth_key must be provided at deploy time
+    accept_routes: true
+    exit_node: false
+    ssh: false
+    shields_up: false
+
+test_requirements:
+  - boot_successful
+  - cloud_init_complete
+  - ssh_accessible
+  - selftest_passes
+  - tailscale_connected
+
+build_options:
+  format: qcow2
+  compression: true
+  size: 2G
+
+metadata:
+  use_cases:
+    - team_networking
+    - simple_setup
+    - nat_traversal
+  network_requirements:
+    - ipv4
+    - outbound_https
+  security_level: managed
+  requires_secrets:
+    - auth_key
+  external_dependencies:
+    - tailscale.com

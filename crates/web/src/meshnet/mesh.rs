@@ -315,45 +315,293 @@ pub fn generate_wireguard_keypair() -> WgKeyPair {
 }
 
 // ============================================================================
-// Tailscale stub (for future)
+// Tailscale Provider Implementation
 // ============================================================================
 
-/// Tailscale mesh provider (stub)
+/// Tailscale node information from the local API
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TailscaleNode {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "hostName")]
+    pub hostname: String,
+    #[serde(rename = "dnsName")]
+    pub dns_name: String,
+    #[serde(rename = "tailscaleIPs")]
+    pub tailscale_ips: Vec<String>,
+    pub online: bool,
+    #[serde(rename = "exitNode")]
+    pub exit_node: bool,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub os: Option<String>,
+}
+
+/// Tailscale status response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TailscaleStatus {
+    #[serde(rename = "BackendState")]
+    pub backend_state: String,
+    #[serde(rename = "Self")]
+    pub self_node: Option<TailscaleNode>,
+    #[serde(rename = "Peer")]
+    pub peers: Option<std::collections::HashMap<String, TailscaleNode>>,
+    #[serde(rename = "MagicDNSSuffix")]
+    pub magic_dns_suffix: Option<String>,
+}
+
+/// Tailscale mesh provider
+/// 
+/// Uses Tailscale for control plane networking:
+/// - Node discovery via Tailscale status
+/// - Secure peering via Tailscale network
+/// - Optional WireGuard overlay for VM traffic
 pub struct TailscaleProvider {
     db: MeshnetDb,
+    /// Socket path for Tailscale local API
+    socket_path: String,
+    /// Tailscale network domain
+    tailnet: Option<String>,
 }
 
 impl TailscaleProvider {
-    #[allow(dead_code)]
+    /// Create a new Tailscale provider
     pub fn new(db: MeshnetDb) -> Self {
-        Self { db }
+        Self {
+            db,
+            socket_path: "/var/run/tailscale/tailscaled.sock".to_string(),
+            tailnet: None,
+        }
+    }
+
+    /// Create with custom socket path (for macOS or custom installs)
+    pub fn with_socket(db: MeshnetDb, socket_path: &str) -> Self {
+        Self {
+            db,
+            socket_path: socket_path.to_string(),
+            tailnet: None,
+        }
+    }
+
+    /// Get Tailscale status via CLI (fallback when socket unavailable)
+    pub async fn get_status(&self) -> Result<TailscaleStatus, String> {
+        let output = tokio::process::Command::new("tailscale")
+            .arg("status")
+            .arg("--json")
+            .output()
+            .await
+            .map_err(|e| format!("Failed to run tailscale: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Tailscale status failed: {}", stderr));
+        }
+
+        serde_json::from_slice(&output.stdout)
+            .map_err(|e| format!("Failed to parse tailscale status: {}", e))
+    }
+
+    /// Get the current node's Tailscale IP
+    pub async fn get_self_ip(&self) -> Result<String, String> {
+        let output = tokio::process::Command::new("tailscale")
+            .arg("ip")
+            .arg("-4")
+            .output()
+            .await
+            .map_err(|e| format!("Failed to get tailscale IP: {}", e))?;
+
+        if !output.status.success() {
+            return Err("Tailscale not connected".to_string());
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    /// Check if Tailscale is connected
+    pub async fn is_connected(&self) -> bool {
+        match self.get_status().await {
+            Ok(status) => status.backend_state == "Running",
+            Err(_) => false,
+        }
+    }
+
+    /// List all peers on the Tailscale network
+    pub async fn list_tailscale_peers(&self) -> Result<Vec<TailscaleNode>, String> {
+        let status = self.get_status().await?;
+        
+        let mut nodes = Vec::new();
+        
+        if let Some(peers) = status.peers {
+            for (_, peer) in peers {
+                nodes.push(peer);
+            }
+        }
+        
+        Ok(nodes)
+    }
+
+    /// Get a specific peer by name or IP
+    pub async fn get_tailscale_peer(&self, name_or_ip: &str) -> Result<Option<TailscaleNode>, String> {
+        let peers = self.list_tailscale_peers().await?;
+        
+        Ok(peers.into_iter().find(|p| {
+            p.name == name_or_ip 
+            || p.hostname == name_or_ip
+            || p.dns_name.starts_with(&format!("{}.", name_or_ip))
+            || p.tailscale_ips.contains(&name_or_ip.to_string())
+        }))
+    }
+
+    /// Send a file to a peer using Tailscale file sharing
+    pub async fn send_file(&self, peer: &str, local_path: &str) -> Result<(), String> {
+        let output = tokio::process::Command::new("tailscale")
+            .arg("file")
+            .arg("cp")
+            .arg(local_path)
+            .arg(format!("{}:", peer))
+            .output()
+            .await
+            .map_err(|e| format!("Failed to send file: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("File transfer failed: {}", stderr));
+        }
+
+        Ok(())
+    }
+
+    /// Receive pending files
+    pub async fn receive_files(&self, output_dir: &str) -> Result<Vec<String>, String> {
+        let output = tokio::process::Command::new("tailscale")
+            .arg("file")
+            .arg("get")
+            .arg(output_dir)
+            .output()
+            .await
+            .map_err(|e| format!("Failed to receive files: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("File receive failed: {}", stderr));
+        }
+
+        // Parse received filenames from stdout
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(stdout.lines().map(|s| s.to_string()).collect())
+    }
+
+    /// Register this node as an InfraSim peer
+    async fn register_as_peer(&self, user_id: Uuid, name: &str) -> Result<MeshPeer, String> {
+        let status = self.get_status().await?;
+        
+        let self_node = status.self_node
+            .ok_or("Tailscale not connected")?;
+        
+        let tailscale_ip = self_node.tailscale_ips.first()
+            .ok_or("No Tailscale IP assigned")?;
+        
+        // Store in local database
+        let record = MeshPeerRecord {
+            id: Uuid::new_v4(),
+            user_id,
+            name: name.to_string(),
+            provider: MeshProviderType::Tailscale,
+            public_key: self_node.id.clone(), // Use Tailscale node ID as "public key"
+            private_key_encrypted: None, // No private key for Tailscale
+            preshared_key: None, // Tailscale handles encryption
+            address: tailscale_ip.clone(),
+            allowed_ips: "0.0.0.0/0".to_string(), // Full mesh
+            endpoint: Some(self_node.dns_name.clone()),
+            keepalive: None, // Tailscale manages keepalives
+            created_at: chrono::Utc::now().timestamp(),
+            revoked_at: None,
+            last_handshake_at: None,
+        };
+
+        self.db.create_mesh_peer(&record)?;
+
+        Ok(MeshPeer::from(&record))
     }
 }
 
 #[async_trait]
 impl MeshProvider for TailscaleProvider {
-    async fn create_peer(&self, _user_id: Uuid, _name: &str) -> Result<MeshPeer, String> {
-        Err("Tailscale provider not yet implemented".to_string())
+    async fn create_peer(&self, user_id: Uuid, name: &str) -> Result<MeshPeer, String> {
+        // For Tailscale, "creating a peer" means registering this node
+        // or tracking an external Tailscale peer
+        self.register_as_peer(user_id, name).await
     }
     
-    fn render_client_config(&self, _peer: &MeshPeerRecord, _identity: &MeshnetIdentity) -> Result<String, String> {
-        Err("Tailscale provider not yet implemented".to_string())
+    fn render_client_config(&self, peer: &MeshPeerRecord, _identity: &MeshnetIdentity) -> Result<String, String> {
+        // For Tailscale, we provide connection info rather than a WireGuard config
+        let config = format!(r#"# Tailscale Peer Configuration
+# ===========================
+# This peer is connected via Tailscale.
+# 
+# Peer Name:     {name}
+# Tailscale IP:  {address}
+# Endpoint:      {endpoint}
+# Node ID:       {node_id}
+#
+# To connect via SSH:
+#   ssh user@{address}
+#   ssh user@{endpoint}
+#
+# To send files:
+#   tailscale file cp ./file.txt {name}:
+#
+# To use as exit node:
+#   tailscale set --exit-node={name}
+"#,
+            name = peer.name,
+            address = peer.address,
+            endpoint = peer.endpoint.clone().unwrap_or_default(),
+            node_id = peer.public_key,
+        );
+        Ok(config)
     }
     
-    async fn revoke_peer(&self, _peer_id: Uuid) -> Result<(), String> {
-        Err("Tailscale provider not yet implemented".to_string())
+    async fn revoke_peer(&self, peer_id: Uuid) -> Result<(), String> {
+        // Mark as revoked in local DB
+        // Note: Can't actually remove from Tailscale network from here
+        self.db.revoke_mesh_peer(peer_id)
     }
     
-    async fn peer_status(&self, _peer_id: Uuid) -> Result<PeerStatus, String> {
-        Err("Tailscale provider not yet implemented".to_string())
+    async fn peer_status(&self, peer_id: Uuid) -> Result<PeerStatus, String> {
+        let peer = self.db.get_mesh_peer(peer_id)?
+            .ok_or("Peer not found")?;
+        
+        // Check if the peer is online via Tailscale
+        let is_online = if let Ok(ts_peer) = self.get_tailscale_peer(&peer.address).await {
+            ts_peer.map(|p| p.online).unwrap_or(false)
+        } else {
+            false
+        };
+        
+        Ok(PeerStatus {
+            id: peer_id,
+            connected: is_online,
+            last_handshake_at: peer.last_handshake_at,
+            bytes_sent: 0, // Not available via status API
+            bytes_received: 0,
+        })
     }
     
-    async fn list_peers(&self, _user_id: Uuid) -> Result<Vec<MeshPeer>, String> {
-        Err("Tailscale provider not yet implemented".to_string())
+    async fn list_peers(&self, user_id: Uuid) -> Result<Vec<MeshPeer>, String> {
+        let records = self.db.get_mesh_peers(user_id)?;
+        
+        // Filter to Tailscale peers only
+        let tailscale_peers: Vec<MeshPeer> = records.iter()
+            .filter(|r| r.provider == MeshProviderType::Tailscale && r.revoked_at.is_none())
+            .map(MeshPeer::from)
+            .collect();
+        
+        Ok(tailscale_peers)
     }
     
-    async fn get_peer(&self, _peer_id: Uuid) -> Result<Option<MeshPeerRecord>, String> {
-        Err("Tailscale provider not yet implemented".to_string())
+    async fn get_peer(&self, peer_id: Uuid) -> Result<Option<MeshPeerRecord>, String> {
+        self.db.get_mesh_peer(peer_id)
     }
 }
 

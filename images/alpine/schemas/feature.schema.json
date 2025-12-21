@@ -1,0 +1,144 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://infrasim.io/schemas/feature.schema.json",
+  "title": "InfraSim Feature Overlay Schema",
+  "description": "Defines a modular feature overlay for Alpine images",
+  "type": "object",
+  "required": ["name", "version", "description"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Feature identifier (lowercase, hyphenated)"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Semantic version"
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable description"
+    },
+    "packages": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "APK packages to install"
+    },
+    "services_enable": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "OpenRC services to enable"
+    },
+    "services_disable": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "OpenRC services to explicitly disable"
+    },
+    "firewall_fragment": {
+      "type": "string",
+      "description": "Path to nftables fragment file relative to feature dir"
+    },
+    "firewall_rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "chain": { "type": "string", "enum": ["input", "output", "forward"] },
+          "rule": { "type": "string" },
+          "comment": { "type": "string" }
+        },
+        "required": ["chain", "rule"]
+      },
+      "description": "Inline firewall rules"
+    },
+    "config_schema": {
+      "type": "string",
+      "description": "Path to JSON schema for feature-specific config"
+    },
+    "requires": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Feature dependencies (must be included before this)"
+    },
+    "conflicts": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Features that cannot coexist with this one"
+    },
+    "provides": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Virtual capabilities provided (e.g., 'vpn', 'discovery')"
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "src": { "type": "string", "description": "Source path relative to feature/files/" },
+          "dst": { "type": "string", "description": "Destination path in image" },
+          "mode": { "type": "string", "pattern": "^[0-7]{3,4}$" }
+        },
+        "required": ["src", "dst"]
+      },
+      "description": "Files to copy into image"
+    },
+    "directories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "mode": { "type": "string", "pattern": "^[0-7]{3,4}$" },
+          "owner": { "type": "string" }
+        },
+        "required": ["path"]
+      },
+      "description": "Directories to create"
+    },
+    "cloud_init": {
+      "type": "object",
+      "properties": {
+        "write_files": { "type": "array" },
+        "runcmd": { "type": "array", "items": { "type": "string" } },
+        "bootcmd": { "type": "array", "items": { "type": "string" } }
+      },
+      "description": "Cloud-init fragments to merge"
+    },
+    "selftest": {
+      "type": "object",
+      "properties": {
+        "manifest": { "type": "string", "default": "selftest/manifest.json" },
+        "entrypoint": { "type": "string", "default": "selftest/run.sh" },
+        "required": { "type": "boolean", "default": true }
+      },
+      "description": "Self-test configuration"
+    },
+    "security": {
+      "type": "object",
+      "properties": {
+        "trust_boundary": {
+          "type": "string",
+          "enum": ["none", "cryptographic", "network"],
+          "description": "What trust this feature provides"
+        },
+        "requires_verification": {
+          "type": "boolean",
+          "description": "Whether actions require cryptographic verification"
+        },
+        "never_auto_trust": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Actions that must never be automatic (e.g., 'peer-add')"
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Additional metadata"
+    }
+  },
+  "additionalProperties": false
+}

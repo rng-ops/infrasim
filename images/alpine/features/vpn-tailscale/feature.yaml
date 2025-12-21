@@ -1,0 +1,96 @@
+# VPN Tailscale Feature Overlay
+# Provides Tailscale mesh networking (managed control plane)
+
+name: vpn-tailscale
+version: 1.0.0
+description: >
+  Tailscale mesh networking with managed control plane.
+  Uses Tailscale's coordination servers for NAT traversal and
+  peer discovery. Simpler setup than WireGuard but requires
+  Tailscale account or self-hosted Headscale.
+
+requires:
+  - base-minimal
+
+conflicts:
+  - vpn-wireguard  # Use profiles to run both with policy routing
+
+packages:
+  - tailscale
+  - iptables
+
+services_enable:
+  - tailscaled
+
+services_disable: []
+
+files:
+  - source: files/tailscale-up.sh
+    destination: /usr/local/bin/tailscale-up.sh
+    mode: "0755"
+  - source: files/tailscale-check.sh
+    destination: /usr/local/bin/tailscale-check.sh
+    mode: "0755"
+  - source: files/tailscale.conf
+    destination: /etc/infrasim/tailscale.conf
+    mode: "0600"
+
+firewall_fragment: |
+  table inet filter {
+    chain input {
+      # Tailscale interface
+      iifname "tailscale0" accept comment "Tailscale tunnel traffic"
+      
+      # Tailscale direct connections (UDP)
+      udp dport 41641 accept comment "Tailscale direct"
+    }
+    
+    chain forward {
+      # Allow forwarding through Tailscale (if exit node)
+      iifname "tailscale0" accept comment "Tailscale forward"
+      oifname "tailscale0" accept comment "Tailscale forward"
+    }
+  }
+
+config_schema:
+  type: object
+  properties:
+    auth_key:
+      type: string
+      default: ""
+      description: Tailscale auth key (tskey-...)
+    control_url:
+      type: string
+      default: ""
+      description: Control server URL (empty for official, or Headscale URL)
+    hostname:
+      type: string
+      default: ""
+      description: Override hostname in Tailscale
+    advertise_routes:
+      type: array
+      items:
+        type: string
+      default: []
+      description: Routes to advertise to the tailnet
+    accept_routes:
+      type: boolean
+      default: true
+      description: Accept routes advertised by other nodes
+    exit_node:
+      type: boolean
+      default: false
+      description: Advertise as exit node
+    ssh:
+      type: boolean
+      default: false
+      description: Enable Tailscale SSH
+    shields_up:
+      type: boolean
+      default: false
+      description: Block incoming connections when not using Tailscale
+
+selftest:
+  - test_tailscale_running
+  - test_tailscale_logged_in
+  - test_tailscale_connectivity

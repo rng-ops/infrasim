@@ -1,0 +1,84 @@
+# mTLS Control Plane Feature Overlay
+# Provides mutual TLS authentication for control plane connections
+
+name: control-mtls
+version: 1.0.0
+description: >
+  Mutual TLS (mTLS) authentication for control plane connections.
+  Requires client certificates signed by a trusted CA for all
+  control plane API access. This is an OPTIONAL security layer
+  on top of the base Ed25519 signature verification.
+
+requires:
+  - base-minimal
+
+conflicts: []
+
+packages:
+  - openssl
+  - ca-certificates
+  - curl
+
+services_enable: []
+
+services_disable: []
+
+files:
+  - source: files/mtls-setup.sh
+    destination: /usr/local/bin/mtls-setup.sh
+    mode: "0755"
+  - source: files/generate-client-cert.sh
+    destination: /usr/local/bin/generate-client-cert.sh
+    mode: "0755"
+  - source: files/verify-mtls.sh
+    destination: /usr/local/bin/verify-mtls.sh
+    mode: "0755"
+  - source: files/mtls.conf
+    destination: /etc/infrasim/mtls.conf
+    mode: "0644"
+
+firewall_fragment: |
+  table inet filter {
+    chain input {
+      # mTLS control plane port
+      tcp dport 8443 accept comment "mTLS control plane"
+    }
+  }
+
+config_schema:
+  type: object
+  required:
+    - ca_cert
+  properties:
+    ca_cert:
+      type: string
+      description: Path to CA certificate for client verification
+    server_cert:
+      type: string
+      description: Path to server certificate
+    server_key:
+      type: string
+      description: Path to server private key
+    client_cert:
+      type: string
+      description: Path to client certificate for outgoing connections
+    client_key:
+      type: string
+      description: Path to client private key for outgoing connections
+    verify_depth:
+      type: integer
+      default: 2
+      description: Maximum certificate chain depth
+    require_client_cert:
+      type: boolean
+      default: true
+      description: Require client certificates (true = mTLS, false = optional)
+    control_port:
+      type: integer
+      default: 8443
+      description: Port for mTLS control plane
+
+selftest:
+  - test_mtls_certs_exist
+  - test_mtls_ca_valid
+  - test_mtls_client_cert_valid

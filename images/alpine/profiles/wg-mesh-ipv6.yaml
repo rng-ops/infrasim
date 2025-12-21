@@ -1,0 +1,60 @@
+# Profile: WireGuard Mesh with IPv6 Rendezvous
+# Self-organizing mesh using WireGuard + IPv6 peer discovery
+# Use case: Decentralized mesh without external coordination
+
+name: wg-mesh-ipv6
+version: 1.0.0
+description: >
+  Self-organizing WireGuard mesh with IPv6-based peer discovery.
+  Uses epoch/slot rendezvous for peer discovery without LAN multicast.
+  Peers are admitted with narrow AllowedIPs until signature verified.
+
+base: alpine:3.19
+
+features:
+  - base-minimal
+  - vpn-wireguard
+  - rendezvous-ipv6
+
+feature_config:
+  vpn-wireguard:
+    listen_port: 51820
+    network_cidr: "10.100.0.0/16"
+    network_cidr6: "fd00:wg::/48"
+    persistent_keepalive: 25
+    narrow_admission: true
+    mtu: 1420
+  
+  rendezvous-ipv6:
+    # mesh_secret must be provided at deploy time
+    epoch_seconds: 60
+    slots_per_epoch: 4
+    slot_duration_ms: 500
+    interface: eth0
+    max_peers: 64
+    peer_callback: "/usr/local/bin/apply-peers.sh add"
+
+test_requirements:
+  - boot_successful
+  - cloud_init_complete
+  - ssh_accessible
+  - selftest_passes
+  - wireguard_up
+  - rendezvous_running
+
+build_options:
+  format: qcow2
+  compression: true
+  size: 2G
+
+metadata:
+  use_cases:
+    - decentralized_mesh
+    - self_organizing
+    - no_external_deps
+  network_requirements:
+    - ipv4
+    - ipv6
+  security_level: high
+  requires_secrets:
+    - mesh_secret

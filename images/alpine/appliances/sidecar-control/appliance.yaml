@@ -1,0 +1,63 @@
+# Sidecar Control Appliance
+# Lightweight container for running tests and generating provenance
+
+name: sidecar-control
+version: 1.0.0
+description: >
+  Lightweight sidecar appliance for testing and provenance generation.
+  Can attach to any profile VM to run integration tests, validate
+  configurations, and generate signed attestations.
+
+base: alpine:3.19
+
+packages:
+  - python3
+  - py3-cryptography
+  - py3-requests
+  - py3-yaml
+  - openssh-client
+  - curl
+  - jq
+  - nmap
+  - tcpdump
+  - wireguard-tools
+  - openssl
+
+files:
+  - source: scripts/run-tests.py
+    destination: /usr/local/bin/run-tests.py
+    mode: "0755"
+  - source: scripts/generate-attestation.py
+    destination: /usr/local/bin/generate-attestation.py
+    mode: "0755"
+  - source: scripts/probe-target.sh
+    destination: /usr/local/bin/probe-target.sh
+    mode: "0755"
+  - source: scripts/collect-evidence.py
+    destination: /usr/local/bin/collect-evidence.py
+    mode: "0755"
+
+entrypoint: /usr/local/bin/run-tests.py
+
+config:
+  # Target VM connection
+  target_ssh_host: ""
+  target_ssh_port: 22
+  target_ssh_user: "root"
+  target_ssh_key: "/etc/sidecar/ssh_key"
+  
+  # Test configuration
+  test_timeout: 300
+  test_categories:
+    - boot
+    - network
+    - services
+    - security
+    - selftest
+  
+  # Provenance signing
+  signing_key: "/etc/sidecar/signing_key"
+  
+  # Output
+  results_dir: "/var/lib/sidecar/results"
+  attestation_format: "intoto"

@@ -524,6 +524,6 @@ mod tests {
     fn test_stub_signature() {
         let sig = generate_stub_signature("test content");
         assert!(sig.starts_with("MESHNET-SIG-V1:"));
-        assert_eq!(sig.len(), 16 + 64); // prefix + hex sha256
+        assert_eq!(sig.len(), 15 + 64); // prefix + hex sha256
     }
 }

@@ -1,0 +1,147 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://infrasim.io/schemas/profile.schema.json",
+  "title": "InfraSim Profile Schema",
+  "description": "Defines a composed profile from feature overlays",
+  "type": "object",
+  "required": ["name", "version", "base", "features"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Profile identifier"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "description": {
+      "type": "string"
+    },
+    "base": {
+      "type": "object",
+      "properties": {
+        "alpine_version": { "type": "string", "default": "3.20" },
+        "arch": { "type": "string", "enum": ["aarch64", "x86_64"], "default": "aarch64" },
+        "image_size": { "type": "string", "default": "2G" }
+      },
+      "required": ["alpine_version"]
+    },
+    "features": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          { "type": "string" },
+          {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "config": { "type": "object", "additionalProperties": true },
+              "enabled": { "type": "boolean", "default": true }
+            },
+            "required": ["name"]
+          }
+        ]
+      },
+      "description": "Ordered list of features to include"
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Global config overrides applied to all features"
+    },
+    "feature_config": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "description": "Per-feature config overrides keyed by feature name"
+    },
+    "network": {
+      "type": "object",
+      "properties": {
+        "interfaces": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "type": { "type": "string", "enum": ["dhcp", "static", "wireguard", "tailscale"] },
+              "role": { "type": "string", "enum": ["control", "data", "management"] }
+            },
+            "required": ["name", "type"]
+          }
+        },
+        "policy_routing": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "control_interface": { "type": "string" },
+            "data_interface": { "type": "string" },
+            "control_mark": { "type": "string" },
+            "data_mark": { "type": "string" }
+          }
+        }
+      }
+    },
+    "security": {
+      "type": "object",
+      "properties": {
+        "trust_root": {
+          "type": "string",
+          "description": "Path or URL to trust root public key"
+        },
+        "require_signed_peers": {
+          "type": "boolean",
+          "default": true
+        },
+        "require_signed_descriptors": {
+          "type": "boolean",
+          "default": true
+        },
+        "default_allowed_ips": {
+          "type": "string",
+          "enum": ["narrow", "wide"],
+          "default": "narrow",
+          "description": "narrow = /32 or /128 per peer; wide = subnet (requires opt-in)"
+        }
+      }
+    },
+    "selftest": {
+      "type": "object",
+      "properties": {
+        "required_tests": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Tests that must pass for this profile"
+        },
+        "skip_tests": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "sign": { "type": "boolean", "default": true },
+        "include_test_results": { "type": "boolean", "default": true }
+      }
+    },
+    "backwards_compat": {
+      "type": "object",
+      "properties": {
+        "variant_alias": {
+          "type": "string",
+          "description": "Maps to old variant name for compatibility"
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

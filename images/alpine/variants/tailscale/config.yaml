@@ -1,0 +1,160 @@
+# Alpine Variant: tailscale
+# ===========================
+# Alpine image with Tailscale for centralized control plane networking.
+# Similar to Docker/Docker Swarm telemetry and node management.
+
+variant: tailscale
+description: "Alpine Linux with Tailscale control plane"
+base_image: alpine
+alpine_version: "3.20"
+
+# Variant-specific packages
+packages:
+  - tailscale
+  - tailscale-openrc
+  # For health checks and monitoring
+  - curl
+  - jq
+
+# Services to enable
+services:
+  - sshd
+  - dhcpcd
+  - chronyd
+  - tailscaled
+
+# Services explicitly disabled
+services_disabled:
+  - wireguard
+
+# Network configuration
+network:
+  interfaces:
+    - name: eth0
+      type: dhcp
+    - name: tailscale0
+      type: tailscale
+      # Managed by Tailscale daemon
+
+# Tailscale-specific configuration
+tailscale:
+  # Authentication
+  auth:
+    # Auth key is provided at deployment time via cloud-init
+    # Can be a reusable key for automated deployments
+    auth_key_env: "TAILSCALE_AUTH_KEY"
+    # Or use interactive login
+    interactive: false
+    
+  # Node settings
+  node:
+    # Hostname template (use cloud-init hostname)
+    hostname: "{HOSTNAME}"
+    # Advertise as exit node (for routing all traffic)
+    advertise_exit_node: false
+    # Accept DNS from Tailscale
+    accept_dns: true
+    # Accept routes from other nodes
+    accept_routes: true
+    # Advertise local routes
+    advertise_routes: []
+    # Enable Tailscale SSH
+    ssh: true
+    
+  # Tags for ACL purposes
+  tags:
+    - "tag:infrasim"
+    - "tag:alpine"
+    
+  # Control plane URL (default or custom Headscale)
+  control_url: null  # null = use default Tailscale
+  
+  # State directory
+  state_dir: /var/lib/tailscale
+
+# Cloud-init modules enabled
+cloud_init:
+  modules:
+    - ssh
+    - users-groups
+    - write-files
+    - runcmd
+    - final-message
+    
+  # Variant-specific cloud-init content
+  write_files:
+    - path: /opt/infrasim/tailscale/tailscale-up.sh
+      permissions: "0755"
+      content_file: tailscale-up.sh
+      
+    - path: /etc/infrasim/tailscale/config.json
+      permissions: "0600"
+      content: |
+        {
+          "advertise_exit_node": false,
+          "accept_dns": true,
+          "accept_routes": true,
+          "ssh": true,
+          "tags": ["tag:infrasim", "tag:alpine"]
+        }
+      
+  runcmd:
+    - "rc-service tailscaled start"
+    - "/opt/infrasim/tailscale/tailscale-up.sh"
+
+# Telemetry configuration
+telemetry:
+  enabled: true
+  agent: /opt/infrasim/telemetry/telemetry-agent.sh
+  # Export to Tailscale network (like Docker Swarm)
+  export:
+    type: tailscale
+    # Push metrics to coordination server
+    endpoint: "http://coordination:8080/telemetry"
+    interval: 30
+  # Tailscale-specific metrics
+  metrics:
+    - ts_online
+    - ts_peer_count
+    - ts_exit_node_active
+    - ts_derp_region
+    - ts_last_seen
+
+# Security hardening
+security:
+  disable_ipv6: false
+  ssh:
+    permit_root_login: false
+    # Prefer Tailscale SSH
+    password_authentication: false
+    pubkey_authentication: true
+  firewall:
+    default_input: drop
+    default_forward: drop
+    default_output: accept
+    rules:
+      - comment: "Allow established connections"
+        rule: "ct state established,related accept"
+      - comment: "Allow loopback"
+        rule: "iif lo accept"
+      - comment: "Allow SSH (fallback)"
+        rule: "tcp dport 22 accept"
+      - comment: "Allow ICMP"
+        rule: "icmp type echo-request accept"
+      - comment: "Allow Tailscale"
+        rule: "iif tailscale0 accept"
+      - comment: "Allow Tailscale UDP"
+        rule: "udp dport 41641 accept"
+
+# Overlay metadata
+overlay:
+  name: overlay-tailscale.qcow2
+  compression: zstd
+  hash: null
+
+# Build metadata
+build:
+  script: build-variant.sh
+  args:
+    - --variant=tailscale
+  runner_label: infrasim-runner-tailscale

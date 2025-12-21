@@ -47,7 +47,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 data-encoding = "2"
 
 # X.509 / mobileconfig signing
-rcgen = { version = "0.13", features = ["pem"] }
+rcgen = { version = "0.13", features = ["pem", "ring"] }
 x509-cert = "0.2"
 der = { version = "0.7", features = ["alloc", "pem"] }
 pem = "3"

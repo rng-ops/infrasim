@@ -1,0 +1,8 @@
+# Build outputs
+output/
+*.qcow2
+*.iso
+
+# Logs
+*.log
+*.log.txt
