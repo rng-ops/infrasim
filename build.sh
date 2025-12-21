@@ -5,6 +5,8 @@ set -euo pipefail
 # Generates all release artifacts for macOS ARM64
 
 VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo "dev")}"
+# Sanitize version string - replace / with - to avoid path issues
+VERSION="${VERSION//\//-}"
 BUILD_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 TARGET="aarch64-apple-darwin"
 PROFILE="${PROFILE:-release}"

@@ -78,14 +78,14 @@ validate_profile() {
     
     # Basic validation - check required fields
     local name base
-    name=$(yq -r '.name // empty' "$profile")
-    base=$(yq -r '.base // empty' "$profile")
+    name=$(yq eval '.name // ""' "$profile")
+    base=$(yq eval '.base // ""' "$profile")
     
-    if [[ -z "$name" ]]; then
+    if [[ -z "$name" || "$name" == "null" ]]; then
         error "Profile missing 'name' field"
     fi
     
-    if [[ -z "$base" ]]; then
+    if [[ -z "$base" || "$base" == "null" ]]; then
         error "Profile missing 'base' field"
     fi
     
@@ -116,7 +116,7 @@ check_dependencies() {
     
     # Check requires
     local requires
-    requires=$(yq -r '.requires[]? // empty' "$feature_file")
+    requires=$(yq eval '.requires // [] | .[]' "$feature_file" 2>/dev/null || true)
     
     for req in $requires; do
         if ! echo "$features_list" | grep -q "^${req}$"; then
@@ -126,7 +126,7 @@ check_dependencies() {
     
     # Check conflicts
     local conflicts
-    conflicts=$(yq -r '.conflicts[]? // empty' "$feature_file")
+    conflicts=$(yq eval '.conflicts // [] | .[]' "$feature_file" 2>/dev/null || true)
     
     for conflict in $conflicts; do
         if echo "$features_list" | grep -q "^${conflict}$"; then
@@ -148,7 +148,7 @@ collect_packages() {
         local feature_file="${FEATURES_DIR}/${feature}/feature.yaml"
         if [[ -f "$feature_file" ]]; then
             local pkgs
-            pkgs=$(yq -r '.packages[]? // empty' "$feature_file")
+            pkgs=$(yq eval '.packages // [] | .[]' "$feature_file" 2>/dev/null || true)
             packages="${packages}${pkgs}"$'\n'
         fi
     done
@@ -168,7 +168,7 @@ collect_services_enable() {
         local feature_file="${FEATURES_DIR}/${feature}/feature.yaml"
         if [[ -f "$feature_file" ]]; then
             local svcs
-            svcs=$(yq -r '.services_enable[]? // empty' "$feature_file")
+            svcs=$(yq eval '.services_enable // [] | .[]' "$feature_file" 2>/dev/null || true)
             services="${services}${svcs}"$'\n'
         fi
     done
@@ -188,7 +188,7 @@ collect_services_disable() {
         local feature_file="${FEATURES_DIR}/${feature}/feature.yaml"
         if [[ -f "$feature_file" ]]; then
             local svcs
-            svcs=$(yq -r '.services_disable[]? // empty' "$feature_file")
+            svcs=$(yq eval '.services_disable // [] | .[]' "$feature_file" 2>/dev/null || true)
             services="${services}${svcs}"$'\n'
         fi
     done
@@ -208,13 +208,13 @@ collect_files() {
         
         if [[ -f "$feature_file" ]]; then
             local files_count
-            files_count=$(yq -r '.files | length' "$feature_file" 2>/dev/null || echo "0")
+            files_count=$(yq eval '.files | length' "$feature_file" 2>/dev/null || echo "0")
             
             for ((i=0; i<files_count; i++)); do
                 local source dest mode
-                source=$(yq -r ".files[$i].source" "$feature_file")
-                dest=$(yq -r ".files[$i].destination" "$feature_file")
-                mode=$(yq -r ".files[$i].mode // \"0644\"" "$feature_file")
+                source=$(yq eval ".files[$i].source" "$feature_file")
+                dest=$(yq eval ".files[$i].destination" "$feature_file")
+                mode=$(yq eval ".files[$i].mode // \"0644\"" "$feature_file")
                 
                 echo "${feature_dir}/${source}|${dest}|${mode}"
             done
@@ -233,9 +233,9 @@ collect_firewall_fragments() {
         
         if [[ -f "$feature_file" ]]; then
             local fragment
-            fragment=$(yq -r '.firewall_fragment // empty' "$feature_file")
+            fragment=$(yq eval '.firewall_fragment // ""' "$feature_file")
             
-            if [[ -n "$fragment" ]]; then
+            if [[ -n "$fragment" && "$fragment" != "null" ]]; then
                 echo "# Feature: $feature"
                 echo "$fragment"
                 echo ""
@@ -271,14 +271,14 @@ compose() {
     validate_profile "$profile"
     
     local profile_name
-    profile_name=$(yq -r '.name' "$profile")
+    profile_name=$(yq eval '.name' "$profile")
     
     local profile_output_dir="${OUTPUT_DIR}/${profile_name}"
     mkdir -p "$profile_output_dir"
     
     # Get feature list
     local features
-    features=$(yq -r '.features[]? // empty' "$profile")
+    features=$(yq eval '.features // [] | .[]' "$profile")
     
     if [[ -z "$features" ]]; then
         error "Profile has no features defined"
@@ -332,8 +332,8 @@ compose() {
     # Copy feature configs
     log "Merging feature configs..."
     local feature_config
-    feature_config=$(yq -r '.feature_config // {}' "$profile")
-    echo "$feature_config" | yq -y '.' > "${profile_output_dir}/feature-config.yaml"
+    feature_config=$(yq eval '.feature_config // {}' "$profile")
+    echo "$feature_config" > "${profile_output_dir}/feature-config.yaml"
     
     # Copy profile metadata
     cp "$profile" "${profile_output_dir}/profile.yaml"
@@ -343,9 +343,9 @@ compose() {
     cat > "${profile_output_dir}/manifest.json" <<EOF
 {
   "profile": "$profile_name",
-  "version": "$(yq -r '.version // "1.0.0"' "$profile")",
-  "base": "$(yq -r '.base' "$profile")",
-  "features": $(yq -j '.features // []' "$profile"),
+  "version": "$(yq eval '.version // "1.0.0"' "$profile")",
+  "base": "$(yq eval '.base' "$profile")",
+  "features": $(yq eval -o=json '.features // []' "$profile"),
   "generated_at": "$(date -Iseconds)",
   "git_sha": "$(git rev-parse HEAD 2>/dev/null || echo 'unknown')"
 }

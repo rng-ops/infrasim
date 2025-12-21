@@ -63,7 +63,7 @@ jobs:
             fi
             
             # Validate required fields
-            name=$(yq -r '.name' "${feature_dir}/feature.yaml")
+            name=$(yq eval '.name' "${feature_dir}/feature.yaml")
             if [ -z "$name" ] || [ "$name" = "null" ]; then
               echo "ERROR: Feature $feature_name missing 'name' field"
               exit 1
@@ -80,8 +80,8 @@ jobs:
             echo "Validating profile: $profile_name"
             
             # Check required fields
-            name=$(yq -r '.name' "$profile")
-            base=$(yq -r '.base' "$profile")
+            name=$(yq eval '.name' "$profile")
+            base=$(yq eval '.base' "$profile")
             
             if [ -z "$name" ] || [ "$name" = "null" ]; then
               echo "ERROR: Profile $profile_name missing 'name' field"
@@ -94,7 +94,7 @@ jobs:
             fi
             
             # Validate features exist
-            for feature in $(yq -r '.features[]?' "$profile"); do
+            for feature in $(yq eval '.features // [] | .[]' "$profile"); do
               if [ ! -d "features/$feature" ]; then
                 echo "ERROR: Profile $profile_name references unknown feature: $feature"
                 exit 1

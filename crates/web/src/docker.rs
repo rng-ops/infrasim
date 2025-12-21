@@ -540,7 +540,7 @@ mod tests {
         assert_eq!(parse_size("1.5GB"), 1610612736);
         assert_eq!(parse_size("100MB"), 104857600);
         assert_eq!(parse_size("512KB"), 524288);
-        assert_eq!(parse_size("1024"), 0); // no unit
+        assert_eq!(parse_size("1024"), 1024); // no unit = bytes
     }
 
     #[test]
