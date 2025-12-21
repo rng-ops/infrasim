@@ -81,6 +81,9 @@ if [[ ! -f "$BASE_IMAGE" ]]; then
     qemu-img create -f qcow2 "$BASE_IMAGE" 2G
 fi
 
+# Convert BASE_IMAGE to absolute path (qemu-img interprets backing files relative to overlay location)
+BASE_IMAGE="$(cd "$(dirname "$BASE_IMAGE")" && pwd)/$(basename "$BASE_IMAGE")"
+
 # Create overlay image
 log "Creating overlay image..."
 OVERLAY_FILE="${PROFILE_DIR}/${PROFILE_NAME}-overlay.qcow2"
