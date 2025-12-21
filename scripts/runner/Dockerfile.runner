@@ -1,0 +1,86 @@
+# ============================================================================
+# Dockerfile.runner - Secure GitHub Actions Runner
+# ============================================================================
+#
+# This container runs the GitHub Actions runner with:
+# - Docker-in-Docker support for container builds
+# - Vault integration for secrets
+# - Full isolation from host system
+#
+FROM ubuntu:22.04
+
+LABEL org.opencontainers.image.title="InfraSim GitHub Actions Runner"
+LABEL org.opencontainers.image.description="Secure containerized GitHub Actions runner"
+
+# Versions
+ARG RUNNER_VERSION=2.311.0
+ARG DOCKER_VERSION=24.0.7
+ARG TARGETARCH=arm64
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    git \
+    jq \
+    unzip \
+    zip \
+    sudo \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    apt-transport-https \
+    software-properties-common \
+    # Build tools
+    build-essential \
+    # QEMU for image builds
+    qemu-utils \
+    qemu-system-arm \
+    qemu-system-aarch64 \
+    # Python
+    python3 \
+    python3-pip \
+    # yq
+    && wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${TARGETARCH} \
+    && chmod +x /usr/local/bin/yq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Docker CLI (for Docker-in-Docker via socket mount)
+RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
+    && echo "deb [arch=${TARGETARCH} signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list \
+    && apt-get update \
+    && apt-get install -y docker-ce-cli docker-compose-plugin \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Vault CLI
+RUN curl -fsSL https://releases.hashicorp.com/vault/1.15.4/vault_1.15.4_linux_${TARGETARCH}.zip -o vault.zip \
+    && unzip vault.zip -d /usr/local/bin \
+    && rm vault.zip \
+    && chmod +x /usr/local/bin/vault
+
+# Create runner user
+RUN useradd -m -d /home/runner -s /bin/bash runner \
+    && usermod -aG sudo runner \
+    && usermod -aG docker runner 2>/dev/null || true \
+    && echo "runner ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+# Create runner directory
+RUN mkdir -p /runner && chown runner:runner /runner
+
+# Download GitHub Actions runner
+WORKDIR /runner
+RUN curl -sL "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-${TARGETARCH}-${RUNNER_VERSION}.tar.gz" \
+    | tar xz \
+    && chown -R runner:runner /runner
+
+# Copy entrypoint script
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Switch to runner user
+USER runner
+
+# Set working directory
+WORKDIR /runner
+
+ENTRYPOINT ["/entrypoint.sh"]
