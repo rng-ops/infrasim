@@ -43,7 +43,11 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq yq
+          sudo apt-get install -y jq
+          # yq is not in apt - install from GitHub releases
+          YQ_ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
+          sudo wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${YQ_ARCH}"
+          sudo chmod +x /usr/local/bin/yq
       
       - name: Validate feature schemas
         run: |
@@ -153,8 +157,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             qemu-utils \
-            yq \
             jq
+          # yq is not in apt - install from GitHub releases
+          YQ_ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
+          sudo wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${YQ_ARCH}"
+          sudo chmod +x /usr/local/bin/yq
       
       - name: Compose profile
         run: |
