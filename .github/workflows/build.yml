@@ -49,6 +49,14 @@ jobs:
         path: target
         key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
     
+    - name: Set build metadata
+      id: meta
+      run: |
+        # Sanitize ref name for artifact naming (replace / with -)
+        SAFE_REF=$(echo "${{ github.ref_name }}" | tr '/' '-')
+        echo "safe_ref=$SAFE_REF" >> $GITHUB_OUTPUT
+        echo "Using safe ref name: $SAFE_REF"
+    
     - name: Run build pipeline
       run: |
         chmod +x build.sh
@@ -101,7 +109,7 @@ jobs:
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: infrasim-${{ github.ref_name }}-aarch64-apple-darwin
+        name: infrasim-${{ steps.meta.outputs.safe_ref }}-aarch64-apple-darwin
         path: |
           dist/*.tar.gz
           dist/*.sha256
@@ -112,7 +120,7 @@ jobs:
     - name: Upload ISVM metadata
       uses: actions/upload-artifact@v4
       with:
-        name: isvm-metadata-${{ github.ref_name }}
+        name: isvm-metadata-${{ steps.meta.outputs.safe_ref }}
         path: |
           dist/version-metadata.json
         retention-days: 90
