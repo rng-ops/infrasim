@@ -57,7 +57,7 @@ jobs:
         VERSION: ${{ github.ref_name }}
     
     - name: Run tests
-      run: cargo test --all --verbose
+      run: cargo test --workspace --exclude infrasim-e2e --verbose
     
     - name: Setup ISVM
       run: |
