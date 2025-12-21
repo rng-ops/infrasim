@@ -83,6 +83,9 @@ if [[ -z "$BASE_IMAGE" ]]; then
     BASE_IMAGE="$SCRIPT_DIR/output/base.qcow2"
 fi
 
+# Convert BASE_IMAGE to absolute path (qemu-img interprets backing files relative to overlay location)
+BASE_IMAGE="$(cd "$(dirname "$BASE_IMAGE")" && pwd)/$(basename "$BASE_IMAGE")"
+
 if [[ -z "$OUTPUT_FILE" ]]; then
     OUTPUT_FILE="$SCRIPT_DIR/output/alpine-${VARIANT}.qcow2"
 fi

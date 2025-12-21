@@ -153,7 +153,7 @@ collect_packages() {
         fi
     done
     
-    echo "$packages" | sort -u | grep -v '^$'
+    echo "$packages" | sort -u | grep -v '^$' || true
 }
 
 # Collect services to enable
@@ -173,7 +173,7 @@ collect_services_enable() {
         fi
     done
     
-    echo "$services" | sort -u | grep -v '^$'
+    echo "$services" | sort -u | grep -v '^$' || true
 }
 
 # Collect services to disable
@@ -193,7 +193,7 @@ collect_services_disable() {
         fi
     done
     
-    echo "$services" | sort -u | grep -v '^$'
+    echo "$services" | sort -u | grep -v '^$' || true
 }
 
 # Collect files from all features
