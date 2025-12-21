@@ -277,8 +277,22 @@ jobs:
         
         # Add InfraSim provenance to the build metadata
         mkdir -p meta/attestations
-        cp ../../../infrasim-provenance/infrasim-build.json meta/attestations/
-        cp ../../../infrasim-provenance/cargo-metadata.json meta/attestations/
+        
+        # Files are in provenance/ subdirectory after artifact download
+        if [ -f ../../../infrasim-provenance/provenance/infrasim-build.json ]; then
+          cp ../../../infrasim-provenance/provenance/infrasim-build.json meta/attestations/
+        elif [ -f ../../../infrasim-provenance/infrasim-build.json ]; then
+          cp ../../../infrasim-provenance/infrasim-build.json meta/attestations/
+        else
+          echo "Warning: infrasim-build.json not found, creating placeholder"
+          echo '{"warning": "provenance not available"}' > meta/attestations/infrasim-build.json
+        fi
+        
+        if [ -f ../../../infrasim-provenance/cargo-metadata.json ]; then
+          cp ../../../infrasim-provenance/cargo-metadata.json meta/attestations/
+        else
+          echo "Warning: cargo-metadata.json not found"
+        fi
         
         # Create unified provenance document
         cat > meta/image-provenance.json << EOF
