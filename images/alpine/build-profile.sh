@@ -248,9 +248,9 @@ generate_provenance() {
     local manifest_file="${PROFILE_DIR}/manifest.json"
     local provenance_file="${OUTPUT_DIR}/${PROFILE_NAME}.provenance.json"
     
-    # Calculate image hash
+    # Calculate image hash (use OUTPUT_FILE since overlay was already moved)
     local image_sha256
-    image_sha256=$(sha256sum "$OVERLAY_FILE" | awk '{print $1}')
+    image_sha256=$(sha256sum "$OUTPUT_FILE" | awk '{print $1}')
     
     # Calculate overlay chain hash
     local overlay_chain_hash

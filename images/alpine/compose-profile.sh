@@ -212,9 +212,15 @@ collect_files() {
             
             for ((i=0; i<files_count; i++)); do
                 local source dest mode
-                source=$(yq eval ".files[$i].source" "$feature_file")
-                dest=$(yq eval ".files[$i].destination" "$feature_file")
+                # Support both src/dst and source/destination field names
+                source=$(yq eval ".files[$i].src // .files[$i].source" "$feature_file")
+                dest=$(yq eval ".files[$i].dst // .files[$i].destination" "$feature_file")
                 mode=$(yq eval ".files[$i].mode // \"0644\"" "$feature_file")
+                
+                # Skip if source is null or empty
+                if [[ -z "$source" || "$source" == "null" ]]; then
+                    continue
+                fi
                 
                 echo "${feature_dir}/${source}|${dest}|${mode}"
             done
