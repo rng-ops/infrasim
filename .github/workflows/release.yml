@@ -192,7 +192,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y qemu-utils
+        sudo apt-get install -y qemu-utils jq
         
         # Install yq
         sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.50.1/yq_linux_amd64
@@ -206,21 +206,81 @@ jobs:
         
         PROFILE="${{ matrix.profile }}"
         VERSION="${{ needs.prepare.outputs.version }}"
-        OUTPUT_FILE="alpine-${PROFILE}-${VERSION}.qcow2"
+        OUTPUT_NAME="alpine-${PROFILE}-${VERSION}"
+        OUTPUT_FILE="${OUTPUT_NAME}.qcow2"
         
-        # Build the profile (creates composed overlay + qcow2)
-        ./build-profile.sh "${PROFILE}" "${OUTPUT_FILE}" || {
+        # Step 1: Compose the profile (creates build/<profile> with all overlay files)
+        echo "::group::Composing profile ${PROFILE}"
+        ./compose-profile.sh "${PROFILE}" || {
+          echo "::warning::Profile ${PROFILE} composition failed"
+          echo "built=false" >> $GITHUB_OUTPUT
+          exit 0
+        }
+        echo "::endgroup::"
+        
+        # Step 2: Build the qcow2 image
+        echo "::group::Building qcow2 image"
+        CI_VALIDATION_ONLY=true ./build-profile.sh "${PROFILE}" --output "${OUTPUT_FILE}" || {
           echo "::warning::Profile ${PROFILE} build failed, creating placeholder"
           qemu-img create -f qcow2 "${OUTPUT_FILE}" 1G
         }
+        echo "::endgroup::"
         
-        if [ -f "${OUTPUT_FILE}" ]; then
-          sha256sum "${OUTPUT_FILE}" > "${OUTPUT_FILE}.sha256"
-          echo "built=true" >> $GITHUB_OUTPUT
-          echo "file=${OUTPUT_FILE}" >> $GITHUB_OUTPUT
+        # Step 3: Package the overlay files into a tarball
+        # This is critical - the overlay contains all VPN configs, scripts, etc.
+        OVERLAY_DIR="build/${PROFILE}"
+        if [ -d "${OVERLAY_DIR}/rootfs" ]; then
+          echo "::group::Packaging overlay files"
+          # Create overlay tarball with all files that would be injected
+          tar -czvf "${OUTPUT_NAME}-overlay.tar.gz" -C "${OVERLAY_DIR}" \
+            rootfs \
+            packages.txt \
+            services-enable.txt \
+            services-disable.txt \
+            manifest.json \
+            profile.yaml \
+            2>/dev/null || tar -czvf "${OUTPUT_NAME}-overlay.tar.gz" -C "${OVERLAY_DIR}" .
+          
+          # Also copy key config files for visibility
+          if [ -f "${OVERLAY_DIR}/rootfs/etc/wireguard/wg0.conf" ]; then
+            echo "WireGuard config present"
+          fi
+          if [ -f "${OVERLAY_DIR}/rootfs/etc/tailscale/tailscaled.conf" ]; then
+            echo "Tailscale config present"
+          fi
+          echo "::endgroup::"
         else
-          echo "built=false" >> $GITHUB_OUTPUT
+          echo "::warning::No rootfs directory found for profile ${PROFILE}"
+          # Create empty overlay tarball
+          mkdir -p empty_overlay
+          tar -czvf "${OUTPUT_NAME}-overlay.tar.gz" -C empty_overlay .
         fi
+        
+        # Step 4: Create combined bundle (qcow2 + overlay + provenance)
+        echo "::group::Creating release bundle"
+        mkdir -p release
+        mv "${OUTPUT_FILE}" release/ 2>/dev/null || true
+        mv "${OUTPUT_NAME}-overlay.tar.gz" release/ 2>/dev/null || true
+        
+        # Copy provenance if generated
+        if [ -f "output/${PROFILE}.provenance.json" ]; then
+          mv "output/${PROFILE}.provenance.json" "release/${OUTPUT_NAME}.provenance.json"
+        fi
+        
+        # Create checksums
+        cd release
+        for f in *; do
+          sha256sum "$f" > "${f}.sha256" 2>/dev/null || true
+        done
+        echo "::endgroup::"
+        
+        # Calculate overlay hash for verification
+        OVERLAY_HASH=$(sha256sum "../${OVERLAY_DIR}/packages.txt" "../${OVERLAY_DIR}/manifest.json" 2>/dev/null | sha256sum | awk '{print $1}' || echo "none")
+        echo "Overlay content hash: ${OVERLAY_HASH}"
+        
+        echo "built=true" >> $GITHUB_OUTPUT
+        echo "file=${OUTPUT_FILE}" >> $GITHUB_OUTPUT
+        echo "overlay_hash=${OVERLAY_HASH}" >> $GITHUB_OUTPUT
 
     - name: Upload profile image
       if: steps.build.outputs.built == 'true'
@@ -228,8 +288,7 @@ jobs:
       with:
         name: alpine-${{ matrix.profile }}
         path: |
-          images/alpine/*.qcow2
-          images/alpine/*.sha256
+          images/alpine/release/*
         retention-days: 7
 
     - name: Summary
