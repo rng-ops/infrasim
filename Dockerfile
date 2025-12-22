@@ -1,7 +1,7 @@
 # Multi-stage Dockerfile for InfraSim Daemon
 # Target: ARM64 Linux (for Docker Desktop on macOS)
 
-FROM rust:1.83-slim AS builder
+FROM rustlang/rust:nightly-slim AS builder
 
 # Install dependencies
 RUN apt-get update && apt-get install -y \
@@ -16,8 +16,8 @@ WORKDIR /build
 # Copy source
 COPY . .
 
-# Build release binary
-RUN cargo build --release --bin infrasimd
+# Build release binary (using nightly for edition2024 support)
+RUN cargo build --release --package infrasim-daemon --bin infrasimd
 
 # Runtime stage
 FROM debian:bookworm-slim
