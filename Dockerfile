@@ -1,7 +1,7 @@
 # Multi-stage Dockerfile for InfraSim Daemon
 # Target: ARM64 Linux (for Docker Desktop on macOS)
 
-FROM rust:1.75-slim as builder
+FROM rust:1.83-slim AS builder
 
 # Install dependencies
 RUN apt-get update && apt-get install -y \
