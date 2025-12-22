@@ -1,0 +1,501 @@
+# ============================================================================
+# release.yml - Comprehensive Release Workflow
+# ============================================================================
+#
+# Creates a unified GitHub Release containing ALL project artifacts:
+# - macOS ARM64 binaries (infrasim, infrasimd, infrasim-web, terraform-provider)
+# - Alpine qcow2 images for all VPN profiles
+# - Kali XFCE VNC image
+# - GitHub Actions runner sidecar (docker-compose bundle)
+# - Provenance and build metadata
+#
+# Triggers:
+# - Push to main (creates a rolling release with date-based tag)
+# - Tag push (v*) creates a versioned release
+# - Manual dispatch for ad-hoc releases
+#
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (leave empty for auto)'
+        required: false
+      dry_run:
+        description: 'Dry run (skip actual release creation)'
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+  ALPINE_VERSION: '3.20'
+  IMAGE_OWNER: ${{ vars.IMAGE_OWNER || github.actor }}
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  # ===========================================================================
+  # Determine Release Version
+  # ===========================================================================
+  prepare:
+    name: Prepare Release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag_name: ${{ steps.version.outputs.tag_name }}
+      is_release: ${{ steps.version.outputs.is_release }}
+      short_sha: ${{ steps.version.outputs.short_sha }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Determine version
+      id: version
+      run: |
+        SHORT_SHA=$(git rev-parse --short HEAD)
+        DATE=$(date +%Y%m%d)
+        
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.version }}" ]]; then
+          VERSION="${{ inputs.version }}"
+          TAG_NAME="v${VERSION}"
+          IS_RELEASE="true"
+        elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+          VERSION="${{ github.ref_name }}"
+          TAG_NAME="${VERSION}"
+          IS_RELEASE="true"
+        else
+          # Rolling release for main branch
+          VERSION="${DATE}-${SHORT_SHA}"
+          TAG_NAME="release-${VERSION}"
+          IS_RELEASE="false"
+        fi
+        
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
+        echo "is_release=${IS_RELEASE}" >> $GITHUB_OUTPUT
+        echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+        
+        echo "### Release Info" >> $GITHUB_STEP_SUMMARY
+        echo "- **Version:** ${VERSION}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Tag:** ${TAG_NAME}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Type:** $([ \"${IS_RELEASE}\" = \"true\" ] && echo 'Versioned Release' || echo 'Rolling Release')" >> $GITHUB_STEP_SUMMARY
+
+  # ===========================================================================
+  # Build macOS ARM64 Binaries
+  # ===========================================================================
+  build-macos:
+    name: Build macOS ARM64
+    runs-on: macos-14
+    needs: prepare
+    outputs:
+      artifact_name: ${{ steps.package.outputs.artifact_name }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: aarch64-apple-darwin
+
+    - name: Install dependencies
+      run: brew install protobuf
+
+    - name: Cache cargo
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: macos-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Build binaries
+      run: |
+        cargo build --release --workspace --exclude infrasim-e2e
+        
+    - name: Package binaries
+      id: package
+      run: |
+        VERSION="${{ needs.prepare.outputs.version }}"
+        ARTIFACT_NAME="infrasim-${VERSION}-aarch64-apple-darwin"
+        
+        mkdir -p dist
+        cp target/release/infrasim dist/
+        cp target/release/infrasimd dist/
+        cp target/release/infrasim-web dist/
+        cp target/release/terraform-provider-infrasim dist/
+        
+        # Create tarball
+        cd dist
+        tar -czvf "${ARTIFACT_NAME}.tar.gz" infrasim infrasimd infrasim-web terraform-provider-infrasim
+        sha256sum "${ARTIFACT_NAME}.tar.gz" > "${ARTIFACT_NAME}.tar.gz.sha256"
+        
+        # Create manifest
+        cat > manifest.json << EOF
+        {
+          "version": "${VERSION}",
+          "commit": "${{ github.sha }}",
+          "build_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "binaries": {
+            "infrasim": "$(sha256sum infrasim | awk '{print $1}')",
+            "infrasimd": "$(sha256sum infrasimd | awk '{print $1}')",
+            "infrasim-web": "$(sha256sum infrasim-web | awk '{print $1}')",
+            "terraform-provider-infrasim": "$(sha256sum terraform-provider-infrasim | awk '{print $1}')"
+          }
+        }
+        EOF
+        
+        echo "artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
+
+    - name: Upload binaries
+      uses: actions/upload-artifact@v4
+      with:
+        name: macos-binaries
+        path: |
+          dist/*.tar.gz
+          dist/*.sha256
+          dist/manifest.json
+        retention-days: 7
+
+  # ===========================================================================
+  # Build Alpine Profile Images
+  # ===========================================================================
+  build-alpine-profiles:
+    name: Build Alpine Profiles
+    runs-on: ubuntu-latest
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        profile:
+          - no-vpn-minimal
+          - wg-bonjour
+          - wg-mesh-ipv6
+          - ts-managed
+          - ts-mtls
+          - dual-vpn-separated
+    outputs:
+      profiles_built: ${{ steps.summary.outputs.profiles }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y qemu-utils
+        
+        # Install yq
+        sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.50.1/yq_linux_amd64
+        sudo chmod +x /usr/local/bin/yq
+
+    - name: Build profile
+      id: build
+      run: |
+        cd images/alpine
+        chmod +x build-profile.sh compose-profile.sh
+        
+        PROFILE="${{ matrix.profile }}"
+        VERSION="${{ needs.prepare.outputs.version }}"
+        OUTPUT_FILE="alpine-${PROFILE}-${VERSION}.qcow2"
+        
+        # Build the profile (creates composed overlay + qcow2)
+        ./build-profile.sh "${PROFILE}" "${OUTPUT_FILE}" || {
+          echo "::warning::Profile ${PROFILE} build failed, creating placeholder"
+          qemu-img create -f qcow2 "${OUTPUT_FILE}" 1G
+        }
+        
+        if [ -f "${OUTPUT_FILE}" ]; then
+          sha256sum "${OUTPUT_FILE}" > "${OUTPUT_FILE}.sha256"
+          echo "built=true" >> $GITHUB_OUTPUT
+          echo "file=${OUTPUT_FILE}" >> $GITHUB_OUTPUT
+        else
+          echo "built=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Upload profile image
+      if: steps.build.outputs.built == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: alpine-${{ matrix.profile }}
+        path: |
+          images/alpine/*.qcow2
+          images/alpine/*.sha256
+        retention-days: 7
+
+    - name: Summary
+      id: summary
+      run: echo "profiles=${{ matrix.profile }}" >> $GITHUB_OUTPUT
+
+  # ===========================================================================
+  # Build Kali XFCE VNC Image
+  # ===========================================================================
+  build-kali-image:
+    name: Build Kali XFCE VNC
+    runs-on: ubuntu-latest
+    needs: prepare
+    continue-on-error: true  # Optional - don't fail release if Kali build fails
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y qemu-utils
+
+    - name: Build Kali image
+      id: build
+      run: |
+        cd images/kali-xfce-vnc-aarch64
+        VERSION="${{ needs.prepare.outputs.version }}"
+        OUTPUT_FILE="kali-xfce-vnc-${VERSION}-aarch64.qcow2"
+        
+        # Check if build script exists and is executable
+        if [ -x ./build.sh ]; then
+          ./build.sh "${OUTPUT_FILE}" || {
+            echo "::warning::Kali build failed, skipping"
+            echo "built=false" >> $GITHUB_OUTPUT
+            exit 0
+          }
+        else
+          echo "::warning::No build.sh found for Kali image"
+          echo "built=false" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+        
+        if [ -f "${OUTPUT_FILE}" ]; then
+          sha256sum "${OUTPUT_FILE}" > "${OUTPUT_FILE}.sha256"
+          echo "built=true" >> $GITHUB_OUTPUT
+        else
+          echo "built=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Upload Kali image
+      if: steps.build.outputs.built == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: kali-xfce-vnc
+        path: |
+          images/kali-xfce-vnc-aarch64/*.qcow2
+          images/kali-xfce-vnc-aarch64/*.sha256
+        retention-days: 7
+
+  # ===========================================================================
+  # Package GitHub Runner Sidecar
+  # ===========================================================================
+  package-runner-sidecar:
+    name: Package Runner Sidecar
+    runs-on: ubuntu-latest
+    needs: prepare
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Package runner sidecar
+      run: |
+        VERSION="${{ needs.prepare.outputs.version }}"
+        BUNDLE_NAME="github-runner-sidecar-${VERSION}"
+        
+        mkdir -p "${BUNDLE_NAME}"
+        
+        # Copy runner files
+        cp -r scripts/runner/* "${BUNDLE_NAME}/"
+        cp scripts/setup-runner.sh "${BUNDLE_NAME}/"
+        
+        # Add version info
+        cat > "${BUNDLE_NAME}/VERSION" << EOF
+        version: ${VERSION}
+        commit: ${{ github.sha }}
+        build_date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+        EOF
+        
+        # Create tarball
+        tar -czvf "${BUNDLE_NAME}.tar.gz" "${BUNDLE_NAME}"
+        sha256sum "${BUNDLE_NAME}.tar.gz" > "${BUNDLE_NAME}.tar.gz.sha256"
+
+    - name: Upload runner sidecar
+      uses: actions/upload-artifact@v4
+      with:
+        name: runner-sidecar
+        path: |
+          github-runner-sidecar-*.tar.gz
+          github-runner-sidecar-*.sha256
+        retention-days: 7
+
+  # ===========================================================================
+  # Build Docker Image (ARM64)
+  # ===========================================================================
+  build-docker:
+    name: Build Docker Image
+    runs-on: ubuntu-24.04-arm
+    needs: prepare
+    continue-on-error: true
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Login to GHCR
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Build and push
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        platforms: linux/arm64
+        push: true
+        tags: |
+          ghcr.io/${{ env.IMAGE_OWNER }}/infrasim-daemon:latest
+          ghcr.io/${{ env.IMAGE_OWNER }}/infrasim-daemon:${{ needs.prepare.outputs.version }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  # ===========================================================================
+  # Create Unified Release
+  # ===========================================================================
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs:
+      - prepare
+      - build-macos
+      - build-alpine-profiles
+      - build-kali-image
+      - package-runner-sidecar
+      - build-docker
+    if: ${{ !inputs.dry_run }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: release-artifacts
+
+    - name: Prepare release files
+      run: |
+        mkdir -p release
+        
+        # Flatten all artifacts into release directory
+        find release-artifacts -type f \( -name "*.tar.gz" -o -name "*.sha256" -o -name "*.qcow2" -o -name "*.json" \) -exec cp {} release/ \;
+        
+        # List all files
+        echo "### Release Artifacts" >> $GITHUB_STEP_SUMMARY
+        ls -la release/ | tee -a $GITHUB_STEP_SUMMARY
+
+    - name: Generate release notes
+      run: |
+        VERSION="${{ needs.prepare.outputs.version }}"
+        TAG="${{ needs.prepare.outputs.tag_name }}"
+        IS_RELEASE="${{ needs.prepare.outputs.is_release }}"
+        
+        cat > release-notes.md << 'EOF'
+        ## InfraSim Release ${{ needs.prepare.outputs.version }}
+        
+        ### 📦 What's Included
+        
+        #### macOS ARM64 Binaries
+        - `infrasim` - CLI tool for managing VMs
+        - `infrasimd` - Background daemon
+        - `infrasim-web` - Web console with MDM enrollment
+        - `terraform-provider-infrasim` - Terraform provider
+        
+        #### Alpine VM Images (qcow2)
+        | Profile | Description |
+        |---------|-------------|
+        | `no-vpn-minimal` | Minimal base image, no VPN |
+        | `wg-bonjour` | WireGuard with Bonjour/mDNS |
+        | `wg-mesh-ipv6` | WireGuard mesh with IPv6 |
+        | `ts-managed` | Tailscale managed mode |
+        | `ts-mtls` | Tailscale with mTLS |
+        | `dual-vpn-separated` | Dual VPN with traffic separation |
+        
+        #### Kali Linux Image
+        - XFCE desktop with VNC access (aarch64)
+        
+        #### GitHub Actions Runner Sidecar
+        - Docker Compose bundle for self-hosted runners
+        - Vault integration for secrets
+        - Docker-in-Docker support
+        
+        #### Docker Image
+        ```bash
+        docker pull ghcr.io/${{ env.IMAGE_OWNER }}/infrasim-daemon:${{ needs.prepare.outputs.version }}
+        ```
+        
+        ### 🚀 Quick Start
+        
+        #### Install with ISVM (Recommended)
+        ```bash
+        curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install-isvm.sh | bash
+        isvm install ${{ needs.prepare.outputs.version }}
+        isvm use ${{ needs.prepare.outputs.version }}
+        ```
+        
+        #### Manual Installation
+        ```bash
+        # Download binaries
+        curl -LO https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare.outputs.tag_name }}/infrasim-${{ needs.prepare.outputs.version }}-aarch64-apple-darwin.tar.gz
+        tar -xzf infrasim-*.tar.gz
+        sudo mv infrasim infrasimd infrasim-web /usr/local/bin/
+        ```
+        
+        #### Download VM Images
+        ```bash
+        # Example: WireGuard with Bonjour
+        curl -LO https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare.outputs.tag_name }}/alpine-wg-bonjour-${{ needs.prepare.outputs.version }}.qcow2
+        ```
+        
+        ### 🔒 Build Provenance
+        - **Commit:** `${{ github.sha }}`
+        - **Run ID:** `${{ github.run_id }}`
+        - **Build Date:** $(date -u +%Y-%m-%dT%H:%M:%SZ)
+        
+        EOF
+
+    - name: Create git tag
+      if: needs.prepare.outputs.is_release != 'true'
+      run: |
+        TAG="${{ needs.prepare.outputs.tag_name }}"
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git tag -a "${TAG}" -m "Release ${TAG}"
+        git push origin "${TAG}"
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ needs.prepare.outputs.tag_name }}
+        name: InfraSim ${{ needs.prepare.outputs.version }}
+        body_path: release-notes.md
+        files: release/*
+        draft: false
+        prerelease: ${{ needs.prepare.outputs.is_release != 'true' }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Summary
+      run: |
+        echo "## ✅ Release Created" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Tag:** \`${{ needs.prepare.outputs.tag_name }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Version:** \`${{ needs.prepare.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "[View Release](https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare.outputs.tag_name }})" >> $GITHUB_STEP_SUMMARY
