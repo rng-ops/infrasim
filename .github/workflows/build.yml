@@ -9,6 +9,13 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Use user namespace for GHCR to avoid org package creation restrictions
+  # Override with repository variable IMAGE_OWNER to use org namespace
+  IMAGE_OWNER: ${{ vars.IMAGE_OWNER || github.actor }}
+
+permissions:
+  contents: read
+  packages: write
 
 jobs:
   build:
@@ -209,7 +216,7 @@ jobs:
         platforms: linux/arm64
         push: true
         tags: |
-          ghcr.io/${{ github.repository }}/daemon:latest
-          ghcr.io/${{ github.repository }}/daemon:${{ github.ref_name }}
+          ghcr.io/${{ env.IMAGE_OWNER }}/infrasim-daemon:latest
+          ghcr.io/${{ env.IMAGE_OWNER }}/infrasim-daemon:${{ github.ref_name }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
