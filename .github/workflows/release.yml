@@ -137,19 +137,19 @@ jobs:
         # Create tarball
         cd dist
         tar -czvf "${ARTIFACT_NAME}.tar.gz" infrasim infrasimd infrasim-web terraform-provider-infrasim
-        sha256sum "${ARTIFACT_NAME}.tar.gz" > "${ARTIFACT_NAME}.tar.gz.sha256"
+        shasum -a 256 "${ARTIFACT_NAME}.tar.gz" > "${ARTIFACT_NAME}.tar.gz.sha256"
         
-        # Create manifest
+        # Create manifest (using shasum for macOS)
         cat > manifest.json << EOF
         {
           "version": "${VERSION}",
           "commit": "${{ github.sha }}",
           "build_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
           "binaries": {
-            "infrasim": "$(sha256sum infrasim | awk '{print $1}')",
-            "infrasimd": "$(sha256sum infrasimd | awk '{print $1}')",
-            "infrasim-web": "$(sha256sum infrasim-web | awk '{print $1}')",
-            "terraform-provider-infrasim": "$(sha256sum terraform-provider-infrasim | awk '{print $1}')"
+            "infrasim": "$(shasum -a 256 infrasim | awk '{print $1}')",
+            "infrasimd": "$(shasum -a 256 infrasimd | awk '{print $1}')",
+            "infrasim-web": "$(shasum -a 256 infrasim-web | awk '{print $1}')",
+            "terraform-provider-infrasim": "$(shasum -a 256 terraform-provider-infrasim | awk '{print $1}')"
           }
         }
         EOF
